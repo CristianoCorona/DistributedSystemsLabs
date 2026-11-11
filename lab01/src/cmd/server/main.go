@@ -3,7 +3,7 @@ package main
 import (
 	"net"
 
-	"tda596/grp74/lab1/src/internal/handlers"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/src/internal/handlers"
 )
 
 func main() {

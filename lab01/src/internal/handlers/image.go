@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"tda596/grp74/lab1/src/internal/storage"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/src/internal/storage"
 )
 
 func HandlePostImageRequest(req *http.Request, res *http.Response) {
