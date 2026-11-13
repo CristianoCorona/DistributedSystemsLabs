@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"bytes"
+	"io"
+	"mime"
 	"net/http"
-	"os"
+	"path"
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/src/internal/storage"
 )
@@ -23,15 +26,16 @@ func HandlePostImageRequest(req *http.Request, res *http.Response) *http.Respons
 func HandleGetImageRequest(req *http.Request, res *http.Response) *http.Response {
     defer req.Body.Close()
 
-	file := &os.File{}
+	file := &bytes.Buffer{}
 	if err := storage.GetImage(req.URL.Path, file); err != nil {
 		setStatusCode(res, http.StatusNotFound)
 		setBodyTextContent(res, "File was not found")
 		return res
 	}
-
+	
     setStatusCode(res, http.StatusOK)
-	setBodyImageContent(res, file)
+	res.Header.Add("Content-Type", mime.TypeByExtension(path.Ext(req.URL.Path)))
+	setBodyImageContent(res, io.NopCloser(file))
 
     return res
 }
