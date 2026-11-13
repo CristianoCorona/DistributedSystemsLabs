@@ -23,4 +23,4 @@ COPY --from=build-stage /http_server /http_server
 
 EXPOSE 8080
 
-CMD ["/http_server"]
+CMD ["sh", "-c", "/http_server ${PORT}"]
