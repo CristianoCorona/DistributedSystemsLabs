@@ -1,23 +1,43 @@
 package storage
 
 import (
-	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
 
-// TODO: add function to save image
-
 func GetImage(path string, file *os.File) error {
+	p := getImagePath(path)
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	*file = *f
+	return nil
+}
+
+func SaveImage(path string, file io.Reader) error {
+	f, err := os.Create(getImagePath(path))
+	if err != nil {
+		return err
+	}
+	if _, err := f.ReadFrom(file); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	
+	return nil
+}
+
+func getImagePath(path string) string {
 	imageBaseDir, err := filepath.Abs("./images/")
 	if err != nil {
 		panic("Could not create image base dir")
 	}
-	fmt.Println(filepath.Join(imageBaseDir, path))
-	val, err := os.Open(filepath.Join(imageBaseDir, path))
-	if err != nil {
-		return os.ErrNotExist
-	}
-	*file = *val
-	return nil
+	return filepath.Join(imageBaseDir, path)
 }
