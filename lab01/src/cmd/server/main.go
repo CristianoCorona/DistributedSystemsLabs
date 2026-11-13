@@ -1,17 +1,26 @@
 package main
 
 import (
+	"log"
 	"net"
+	"os"
+	"strconv"
 	"sync"
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/src/internal/handlers"
 )
 
 func main() {
-    var PORT string = "8080"
-    ln, err := net.Listen("tcp", ":" + PORT)
+    if len(os.Args) < 2 {
+        log.Fatal("You need to specify port number as the first command-line argument")
+    }
+    port := os.Args[1]
+    if _, err := strconv.Atoi(port); err != nil {
+        log.Fatalf("Invalid port number %v", port)
+    }
+    ln, err := net.Listen("tcp", ":" + port)
     if err != nil {
-        // handle error
+        log.Fatalf("Could not open listening socket using TCP on port %s", port)
     }
     defer ln.Close()
     lock := &sync.Mutex{}
@@ -20,7 +29,7 @@ func main() {
     for {
         conn, err := ln.Accept()
         if err != nil {
-            // handle error
+            log.Default().Printf("Could not accrpt incomming connection %v", conn)
         }
         go func () {
             cond.L.Lock()
