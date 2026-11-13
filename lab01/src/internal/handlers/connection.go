@@ -5,7 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
+	"path"
 	"slices"
 	"strings"
 )
@@ -21,7 +21,7 @@ func HandleConnection(conn net.Conn) {
         return
     }
     
-    if (!isValidFile(req.URL.Path)) {
+    if (!isValidFileExt(req.URL.Path)) {
         setStatusCode(res, http.StatusBadRequest)
 		setBodyTextContent(res, "Filetype not supported")
 		res.Write(conn)
@@ -44,11 +44,12 @@ func setStatusCode(res *http.Response, code int) {
 }
 
 func setBodyTextContent(res *http.Response, content string) {
+	res.Header.Add("Content-Type", "text/plain")
 	res.Body = io.NopCloser(strings.NewReader(content))
 	res.ContentLength = int64(len(content))
 }
 
-func setBodyImageContent(res *http.Response, image *os.File) {
+func setBodyImageContent(res *http.Response, image io.ReadCloser) {
 	res.Body = image
 	res.ContentLength = -1
 }
@@ -64,9 +65,8 @@ func createResponse() *http.Response {
 	return res
 }
 
-func isValidFile(path string) bool {
-	pathSlice := strings.Split(path, ".")
-    fileEnding := pathSlice[len(pathSlice) - 1]
-    acceptedFileEndings := []string{"jpg", "jpeg", "css"}
-	return slices.Contains(acceptedFileEndings, fileEnding)
+func isValidFileExt(pathName string) bool {
+	ext := path.Ext(pathName)
+    acceptedFileExt := []string{".jpg", ".jpeg", ".css", ".html", ".txt", ".gif"}
+	return slices.Contains(acceptedFileExt, ext)
 }
