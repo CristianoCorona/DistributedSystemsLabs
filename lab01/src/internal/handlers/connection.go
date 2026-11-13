@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -17,6 +18,13 @@ func HandleConnection(conn net.Conn) {
         setStatusCode(res, http.StatusBadRequest)
 		setBodyTextContent(res, "Invalid request")
         res.Write(conn)
+        return
+    }
+    
+    if (!isValidFile(req.URL.Path)) {
+        setStatusCode(res, http.StatusBadRequest)
+		setBodyTextContent(res, "Filetype not supported")
+		res.Write(conn)
         return
     }
 
@@ -54,4 +62,11 @@ func createResponse() *http.Response {
     }
     res.Header.Set("Connection", "close")
 	return res
+}
+
+func isValidFile(path string) bool {
+	pathSlice := strings.Split(path, ".")
+    fileEnding := pathSlice[len(pathSlice) - 1]
+    acceptedFileEndings := []string{"jpg", "jpeg", "css"}
+	return slices.Contains(acceptedFileEndings, fileEnding)
 }
