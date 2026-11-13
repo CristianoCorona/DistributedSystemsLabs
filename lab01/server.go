@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -39,10 +40,11 @@ func NewServer(addr string, maxConns int, h func(net.Conn, *http.Request), timeo
 func (s *Server) Serve() error {
 	listener, err := net.Listen("tcp", s.addr)
 	if err != nil {
+		// Error when trying to listen on the specified address. This could be due to the port being in use or insufficient permissions.
 		return err
 	}
 	defer listener.Close()
-
+	log.Println("Listening on", s.addr)
 	for {
 		s.sem <- struct{}{} // blocks while maxConns connections are active
 
@@ -80,12 +82,17 @@ func (s *Server) handleConn(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
+		switch {
+		case errors.Is(err, io.EOF):
 			log.Println("Connection closed by client without sending a request")
-			return
+		case errors.Is(err, os.ErrDeadlineExceeded):
+			log.Println("Timeout waiting for request from", conn.RemoteAddr())
+			conn.SetWriteDeadline(time.Now().Add(time.Second)) // set a short deadline to write the error response
+			writeError(conn, http.StatusRequestTimeout)        //notify the client
+		default:
+			log.Println("Bad request from", conn.RemoteAddr(), ":", err)
+			writeError(conn, http.StatusBadRequest)
 		}
-		log.Println("Bad request from", conn.RemoteAddr(), ":", err)
-		writeError(conn, http.StatusBadRequest)
 		return
 	}
 
