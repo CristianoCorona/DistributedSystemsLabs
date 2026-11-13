@@ -3,37 +3,31 @@ package handlers
 import (
 	"net/http"
 	"os"
-	"slices"
-	"strings"
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/src/internal/storage"
 )
 
-func HandlePostImageRequest(req *http.Request, res *http.Response) {
-	setStatusCode(res, http.StatusNotImplemented) // TODO: implement POST request handling
+func HandlePostImageRequest(req *http.Request, res *http.Response) *http.Response {
+	defer req.Body.Close()
+	
+	if err := storage.SaveImage(req.URL.Path, req.Body); err != nil {
+		setStatusCode(res, http.StatusInternalServerError)
+		return res
+	}
+	setStatusCode(res, http.StatusCreated)
+	setBodyTextContent(res, "File saved")
+	return res
 }
 
 
 func HandleGetImageRequest(req *http.Request, res *http.Response) *http.Response {
     defer req.Body.Close()
-	
-    pathSlice := strings.Split(req.URL.Path, ".")
-    fileEnding := pathSlice[len(pathSlice) - 1]
-    acceptedFileEndings := []string{"jpg", "jpeg", "css"}
-    if (!slices.Contains(acceptedFileEndings, fileEnding)) {
-        setStatusCode(res, http.StatusBadRequest)
-		setBodyTextContent(res, "Filetype not supported")
-        return res
-    }
-
 
 	file := &os.File{}
 	if err := storage.GetImage(req.URL.Path, file); err != nil {
-		if err == os.ErrNotExist {
-			setStatusCode(res, http.StatusNotFound)
-			setBodyTextContent(res, "File was not found")
-			return res
-		}
+		setStatusCode(res, http.StatusNotFound)
+		setBodyTextContent(res, "File was not found")
+		return res
 	}
 
     setStatusCode(res, http.StatusOK)
