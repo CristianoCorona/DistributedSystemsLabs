@@ -1,35 +1,37 @@
 package main
 
 import (
+	"bufio"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"time"
 )
-
-// TODO: implement a timeout for the connections to avoid stalling at maxCons
 
 type Server struct {
 	addr    string                                 // address to listen on, built by the caller (ip:port)
 	sem     chan struct{}                          // buffered channel to limit the number of goroutines. struct{} is an empty struct, which takes up no memory.
 	handler func(conn net.Conn, req *http.Request) // how a valid request is handled, to mimic a polymorphic approach.
+	timeout time.Duration                          // timeout for the connections, in seconds
 }
 
 /*
 ** NewServer creates a new Server instance with the specified address, maximum number of connections and request handler function.
  */
-func NewServer(addr string, maxConns int, h func(net.Conn, *http.Request)) *Server {
+func NewServer(addr string, maxConns int, h func(net.Conn, *http.Request), timeout time.Duration) *Server {
 	return &Server{
 		addr:    addr,
 		sem:     make(chan struct{}, maxConns), //maxCons defines the maximum number of active connections.
 		handler: h,
+		timeout: timeout,
 	}
 }
 
 /*
 ** Serve starts the server and listens for incoming connections.
 ** It accepts connections and handles them concurrently, while limiting the number of concurrent connections using a semaphore.
-** TODO: It also timeouts connections after the defined timeout of the server instance.
  */
 func (s *Server) Serve() error {
 	listener, err := net.Listen("tcp", s.addr)
@@ -61,12 +63,31 @@ func (s *Server) Serve() error {
 
 }
 
-/*
-** handleConn handles an individual connection.
-** It reads the request from the connection, and if it's valid, it invokes the handler function provided during server creation.
- */
+// handleConn reads one HTTP request from conn and passes it to the handler.
+// Exactly one request per connection: the connection is always closed on return.
+
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close() // Ensure the connection is closed when the function exits
 
 	// TODO: Implement connection handling logic here
+	// 1. Set the timeout for the connection.
+	conn.SetDeadline(time.Now().Add(s.timeout))
+
+	// 2. Parse the HTTP request from the connection.
+	reader := bufio.NewReader(conn) // http.ReadRequest requires a bufio.Reader, so we wrap the connection in one. This buffer reads the input data in chunks, which is more efficient than reading byte by byte.
+	req, err := http.ReadRequest(reader)
+
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			// Connection closed by the client without sending a request; log it and return.
+			log.Println("Connection closed by client without sending a request")
+			return
+		}
+		// General error in the request (malformed); error 400 Bad Request is sent back to the client.
+		log.Println("Bad request from", conn.RemoteAddr(), ":", err)
+		writeError(conn, http.StatusBadRequest)
+		return
+	}
+	s.handler(conn, req) // Pass the valid request to the handler function for processing.
+
 }
