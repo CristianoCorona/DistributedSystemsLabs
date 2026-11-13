@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 )
 
-func GetImage(path string, file *os.File) error {
+func GetImage(path string, file io.Writer) error {
 	p := getImagePath(path)
 	f, err := os.Open(p)
 	if err != nil {
 		return err
 	}
-	*file = *f
+	f.WriteTo(file)
 	return nil
 }
 
