@@ -1,9 +1,17 @@
 package main
 
 import (
+	"log"
 	"net"
 	"net/http"
+
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/filestore"
 )
+
+// app is the main application struct. It holds the file store.
+type app struct {
+	files *filestore.Store
+}
 
 // knownMethods lists the HTTP methods defined by RFC 9110 and RFC 5789.
 // Requests using any other method are rejected as malformed.
@@ -21,8 +29,10 @@ var knownMethods = map[string]bool{
 
 // route is the server's request handler: it picks the action for req
 // based on its method and path.
-func route(conn net.Conn, req *http.Request) {
-	// 1. unknown method → 400
+func (a *app) route(conn net.Conn, req *http.Request) {
+	// 0. Log the request received.
+	log.Printf("Received request: %s %s", req.Method, req.URL.Path)
+	// 1. unknown method -> 400
 	if !knownMethods[req.Method] {
 		writeError(conn, http.StatusBadRequest)
 		return
@@ -31,9 +41,9 @@ func route(conn net.Conn, req *http.Request) {
 	// 3. switch on req.Method for files
 	switch req.Method {
 	case http.MethodGet:
-		serveFile(conn, req)
+		a.serveFile(conn, req)
 	case http.MethodPost:
-		storeFile(conn, req)
+		a.storeFile(conn, req)
 	default:
 		// Method present in the standard but not implemented in this lab.
 		// Error 501 is returned.
