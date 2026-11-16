@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 )
 
-func GetImage(path string, file io.Writer) error {
-	p := getImagePath(path)
+func GetFile(path string, file io.Writer) error {
+	p := getFilePath(path)
 	f, err := os.Open(p)
 	if err != nil {
 		return err
@@ -16,8 +16,8 @@ func GetImage(path string, file io.Writer) error {
 	return nil
 }
 
-func SaveImage(path string, file io.Reader) error {
-	f, err := os.Create(getImagePath(path))
+func SaveFile(path string, file io.Reader) error {
+	f, err := os.Create(getFilePath(path))
 	if err != nil {
 		return err
 	}
@@ -34,10 +34,10 @@ func SaveImage(path string, file io.Reader) error {
 	return nil
 }
 
-func getImagePath(path string) string {
-	imageBaseDir, err := filepath.Abs("./images/")
+func getFilePath(path string) string {
+	fileBaseDir, err := filepath.Abs("./files/")
 	if err != nil {
-		panic("Could not create image base dir")
+		panic("Could not create file base dir")
 	}
-	return filepath.Join(imageBaseDir, path)
+	return filepath.Join(fileBaseDir, path)
 }

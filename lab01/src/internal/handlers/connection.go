@@ -30,9 +30,9 @@ func HandleConnection(conn net.Conn) {
 
 	switch req.Method {
 	case http.MethodGet:
-		HandleGetImageRequest(req, res)
+		HandleGetFileRequest(req, res)
 	case http.MethodPost:
-		HandlePostImageRequest(req, res)
+		HandlePostFileRequest(req, res)
 	}
 
 	res.Write(conn)
@@ -49,8 +49,8 @@ func setBodyTextContent(res *http.Response, content string) {
 	res.ContentLength = int64(len(content))
 }
 
-func setBodyImageContent(res *http.Response, image io.ReadCloser) {
-	res.Body = image
+func setBodyFileContent(res *http.Response, file io.ReadCloser) {
+	res.Body = file
 	res.ContentLength = -1
 }
 
