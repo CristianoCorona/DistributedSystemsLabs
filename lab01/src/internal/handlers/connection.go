@@ -33,7 +33,11 @@ func HandleConnection(conn net.Conn) {
 		HandleGetFileRequest(req, res)
 	case http.MethodPost:
 		HandlePostFileRequest(req, res)
+	default:
+		setStatusCode(res, http.StatusNotImplemented)
+		setBodyTextContent(res, "Method not implemented")
 	}
+
 
 	res.Write(conn)
 }
