@@ -9,20 +9,19 @@ import (
 
 type PathCond struct {
 	lock sync.Locker
-	readCond sync.Cond
+	readCond *sync.Cond
 	readCount int
-	writeCond sync.Cond
+	writeCond *sync.Cond
 	waitingWriters int
 }
 
 var syncMap = make(map [string]*PathCond)
+var mapLock = &sync.Mutex{}
 
 func GetFile(path string, file io.Writer) error {
 	p := getFilePath(path)
-	entry, ok := syncMap[p]
-	if !ok {
-		createSyncMapEntry(p)
-	}
+	entry := getSyncMapEntry(p)
+
 	entry.lock.Lock()
 	for entry.waitingWriters > 0 {
 		entry.readCond.Wait()
@@ -48,10 +47,7 @@ func GetFile(path string, file io.Writer) error {
 func SaveFile(path string, file io.Reader) error {
 	p := getFilePath(path)
 
-	entry, ok := syncMap[p]
-	if !ok {
-		createSyncMapEntry(p)
-	}
+	entry := getSyncMapEntry(p)
 	entry.lock.Lock()
 	entry.waitingWriters++
 	for entry.readCount > 0 {
@@ -97,9 +93,23 @@ func createSyncMapEntry(path string) {
 	l := &sync.Mutex{}
 	syncMap[path] = &PathCond{
 		lock: l,
-		readCond: *sync.NewCond(l),
+		readCond: sync.NewCond(l),
 		readCount: 0,
-		writeCond: *sync.NewCond(l),
+		writeCond: sync.NewCond(l),
 		waitingWriters: 0,
 	}
+}
+
+func getSyncMapEntry(path string) *PathCond {
+	entry, ok := syncMap[path]
+	if !ok {
+		mapLock.Lock()
+		_, ok = syncMap[path]
+		if !ok {
+			createSyncMapEntry(path)
+		}
+		entry = syncMap[path]
+		mapLock.Unlock()
+	}
+	return entry
 }
