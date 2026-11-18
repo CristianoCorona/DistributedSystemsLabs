@@ -1,16 +1,26 @@
-package main
+// Package app is the protocol layer: it decides what to do with a parsed request and maps
+// the errors of the file store to HTTP status codes. It does not know how connections are
+// accepted (that is the server package) nor how files are laid out on disk (that is the
+// filestore package).
+package app
 
 import (
 	"log"
 	"net"
 	"net/http"
 
-	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/filestore"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
 )
 
-// app is the main application struct. It holds the file store.
-type app struct {
+// App is the main application struct. It holds the file store.
+type App struct {
 	files *filestore.Store
+}
+
+// New returns an App that serves and stores files in files.
+func New(files *filestore.Store) *App {
+	return &App{files: files}
 }
 
 // knownMethods lists the HTTP methods defined by RFC 9110 and RFC 5789.
@@ -27,14 +37,14 @@ var knownMethods = map[string]bool{
 	http.MethodTrace:   true, // TRACE, known but not implemented (501)
 }
 
-// route is the server's request handler: it picks the action for req
+// Route is the server's request handler: it picks the action for req
 // based on its method and path.
-func (a *app) route(conn net.Conn, req *http.Request) {
+func (a *App) Route(conn net.Conn, req *http.Request) {
 	// 0. Log the request received.
 	log.Printf("Received request: %s %s", req.Method, req.URL.Path)
 	// 1. unknown method -> 400
 	if !knownMethods[req.Method] {
-		writeError(conn, http.StatusBadRequest)
+		response.Error(conn, http.StatusBadRequest)
 		return
 	}
 	// TODO: 2. (bonus) broker paths
@@ -47,6 +57,6 @@ func (a *app) route(conn net.Conn, req *http.Request) {
 	default:
 		// Method present in the standard but not implemented in this lab.
 		// Error 501 is returned.
-		writeError(conn, http.StatusNotImplemented)
+		response.Error(conn, http.StatusNotImplemented)
 	}
 }

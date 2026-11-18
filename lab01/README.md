@@ -16,7 +16,7 @@ Responses are written by hand.
   left behind by a previous run.
 
 Only the Basic part of the assignment is implemented. The pub-sub broker (Bonus part) is not:
-`app.route` has only a `TODO` for it.
+`App.Route` (`internal/app`) has only a `TODO` for it.
 
 ## Requirements coverage
 
@@ -24,23 +24,23 @@ This table covers the Basic part of `docs/assignment.md`.
 
 | Requirement | Where | How |
 |---|---|---|
-| A new goroutine for each client | `Server.Serve` (`server.go`) | After each `Accept`, `Serve` starts a goroutine that runs `Server.handleConn`. |
-| Binary called `http_server`, port as first argument, no hard-coded port | `main` (`main.go`) | Build with `go build -o http_server .`. With anything other than exactly one argument, the program logs `Usage: ./http_server <port>` and exits with status 1. |
+| A new goroutine for each client | `Server.Serve` (`internal/server`) | After each `Accept`, `Serve` starts a goroutine that runs `Server.handleConn`. |
+| Binary called `http_server`, port as first argument, no hard-coded port | `main` (`cmd/http_server`) | Build with `go build -o http_server ./cmd/http_server`. With anything other than exactly one argument, the program logs `Usage: ./http_server <port>` and exits with status 1. |
 | Compiles without errors or warnings | the whole module | `go build`, `go vet ./...` and `gofmt -l .` produce no output. |
 | No fixed IP address for the server or its clients | `main`, `Server.Serve` | Listens on `":" + port`, which means all interfaces (IPv4 and IPv6). Client addresses are not checked. |
 | Networking with `net` only | `Server.Serve` | `net.Listen("tcp", addr)` and `listener.Accept()`. |
-| `net/http` only for parsing | `Server.handleConn`, `writeResponse` (`response.go`) | `http.ReadRequest` parses the request. The status line and headers are written with `fmt.Fprintf`. `http.Response`, `http.Serve` and `http.ListenAndServe` are not used. |
-| At most 10 concurrent connections; wait when the limit is reached | `NewServer`, `Server.Serve` | The `Server.sem` field is a buffered channel with capacity 10 (set in `main`) that works as a counting semaphore. A slot is taken **before** `Accept` and released when the connection goroutine returns. |
+| `net/http` only for parsing | `Server.handleConn`, `response.Write` (`internal/response`) | `http.ReadRequest` parses the request. The status line and headers are written with `fmt.Fprintf`. `http.Response`, `http.Serve` and `http.ListenAndServe` are not used. |
+| At most 10 concurrent connections; wait when the limit is reached | `server.New`, `Server.Serve` | The `Server.sem` field is a buffered channel with capacity 10 (set in `main`) that works as a counting semaphore. A slot is taken **before** `Accept` and released when the connection goroutine returns. |
 | Check that the request is properly formatted | `Server.handleConn` | If `http.ReadRequest` fails (malformed request line or headers), the server answers `400 Bad Request`. |
-| Serve `html`, `txt`, `gif`, `jpeg`, `jpg`, `css` with the right `Content-Type` | `mimeTypes`, `Store.resolve` (`filestore/filestore.go`) | `mimeTypes` maps `.html`→`text/html`, `.txt`→`text/plain`, `.gif`→`image/gif`, `.jpeg`/`.jpg`→`image/jpeg` and `.css`→`text/css`. |
-| Any other extension → 400 | `Store.resolve`, `app.serveFile`, `app.storeFile` (`handlers.go`) | `resolve` returns `ErrBadExtension`, which the handlers map to `400` for both `GET` and `POST`. Files with no extension are also rejected. |
-| File does not exist → 404 | `Store.Get`, `app.serveFile` | `os.ErrNotExist` becomes `ErrNotFound`, which the handler maps to `404`. |
-| `GET` and `POST` implemented; other valid methods → 501 | `knownMethods`, `app.route` (`router.go`) | The nine methods of RFC 9110 and RFC 5789 are known. `GET` and `POST` are dispatched to handlers. The other seven get `501 Not Implemented`. |
-| Invalid request → 400 | `app.route`, `Server.handleConn` | An unknown method (for example `FOO`) or an unparsable request gets `400`. |
-| Any other error condition → 400 | `app.serveFile`, `app.storeFile` | Unexpected filesystem errors are logged and answered with `400`. |
-| `POST` stores the file and a later `GET` returns it | `app.storeFile`, `Store.Put` | `Put` writes the body to `data/<path>`. A successful `POST` returns `200 OK`. |
+| Serve `html`, `txt`, `gif`, `jpeg`, `jpg`, `css` with the right `Content-Type` | `mimeTypes`, `Store.resolve` (`internal/filestore`) | `mimeTypes` maps `.html`→`text/html`, `.txt`→`text/plain`, `.gif`→`image/gif`, `.jpeg`/`.jpg`→`image/jpeg` and `.css`→`text/css`. |
+| Any other extension → 400 | `Store.resolve`, `App.serveFile`, `App.storeFile` (`internal/app`) | `resolve` returns `ErrBadExtension`, which the handlers map to `400` for both `GET` and `POST`. Files with no extension are also rejected. |
+| File does not exist → 404 | `Store.Get`, `App.serveFile` | `os.ErrNotExist` becomes `ErrNotFound`, which the handler maps to `404`. |
+| `GET` and `POST` implemented; other valid methods → 501 | `knownMethods`, `App.Route` (`internal/app`) | The nine methods of RFC 9110 and RFC 5789 are known. `GET` and `POST` are dispatched to handlers. The other seven get `501 Not Implemented`. |
+| Invalid request → 400 | `App.Route`, `Server.handleConn` | An unknown method (for example `FOO`) or an unparsable request gets `400`. |
+| Any other error condition → 400 | `App.serveFile`, `App.storeFile` | Unexpected filesystem errors are logged and answered with `400`. |
+| `POST` stores the file and a later `GET` returns it | `App.storeFile`, `Store.Put` | `Put` writes the body to `data/<path>`. A successful `POST` returns `200 OK`. |
 | Concurrent `POST`s are atomic; `GET` sees one complete version | `Store.Put` | Write to a temporary file, then `os.Rename`. See [Atomic POST](#atomic-post). |
-| Well-formed error responses | `writeError` (`response.go`) | Every error is a full HTTP/1.0 response with `Content-Type: text/plain`, `Content-Length` and a body that holds the status text (for example `Not Found`). |
+| Well-formed error responses | `response.Error` (`internal/response`) | Every error is a full HTTP/1.0 response with `Content-Type: text/plain`, `Content-Length` and a body that holds the status text (for example `Not Found`). |
 | No web frameworks | `go.mod` | No dependencies outside the standard library. |
 | Containers (recommended) | `Dockerfile` | Multi-stage build. See [Run with Docker or Podman](#run-with-docker-or-podman). |
 
@@ -48,13 +48,15 @@ This table covers the Basic part of `docs/assignment.md`.
 
 ```
 lab01/
-├── main.go               # argument check, document root setup, temp file cleanup, startup
-├── server.go             # TCP listener, connection limit, deadline, request parsing
-├── router.go             # method validation and dispatch
-├── handlers.go           # GET and POST handlers, error -> status code mapping
-├── response.go           # writes HTTP/1.0 responses
-├── filestore/
-│   └── filestore.go      # extension check, path cleaning, file read, atomic write
+├── cmd/
+│   └── http_server/
+│       └── main.go       # argument check, document root setup, temp file cleanup, wiring
+├── internal/
+│   ├── server/           # TCP listener, connection limit, deadline, request parsing
+│   ├── app/              # method validation and dispatch, GET and POST handlers,
+│   │                     # error -> status code mapping
+│   ├── response/         # writes HTTP/1.0 responses
+│   └── filestore/        # extension check, path cleaning, file read, atomic write
 ├── docs/
 │   └── assignment.md     # lab text
 ├── scripts/
@@ -66,22 +68,36 @@ lab01/
 └── README.md
 ```
 
-The code has three layers. Dependencies go downwards only.
+The code has three layers. Each layer is a package under `internal/`, so Go itself prevents
+code outside `lab01` from importing it, and the package boundaries decide what is visible:
+only the names the other layers need are exported. Dependencies go downwards only.
 
-1. **Transport** (`Server` in `server.go`): accepts TCP connections, enforces the connection
-   limit and the deadline, and parses the request with `http.ReadRequest`. It does not know
-   about files. It passes each parsed request to a handler function of type
-   `func(net.Conn, *http.Request)`.
-2. **Protocol** (`app` in `router.go` and `handlers.go`, plus `response.go`): decides what to
-   do with a request and maps errors from the domain layer to status codes. `app.route` is the
-   handler that `main` passes to the server.
-3. **Domain** (`filestore.Store`): `Store.Get` and `Store.Put` resolve a URL path to a file
+1. **Transport** (package `server`): accepts TCP connections, enforces the connection limit
+   and the deadline, and parses the request with `http.ReadRequest`. It does not know about
+   files. It passes each parsed request to a `server.Handler`, a plain function type
+   `func(net.Conn, *http.Request)`. It uses `response.Error` for the errors it answers itself
+   (`400` and `408`).
+2. **Protocol** (package `app`, plus package `response`): `App.Route` decides what to do with
+   a request, and the unexported handlers `serveFile` and `storeFile` map errors from the
+   domain layer to status codes. `response.Write` and `response.Error` serialize the answer.
+   `app` does not import `server`: `main` passes the method value `App.Route` to the server,
+   and it matches `server.Handler` because the signatures are the same.
+3. **Domain** (package `filestore`): `Store.Get` and `Store.Put` resolve a URL path to a file
    under the root directory and read or write it. They return the errors `ErrNotFound` and
    `ErrBadExtension` and do not know about HTTP.
 
-`main` wires the layers together. The document root is the constant `docRoot` (`./data`).
-Before the server starts, `main` creates the directory with `os.MkdirAll(docRoot, 0o755)` and
-calls `removeTempFiles`. Git ignores `data/`, so its contents are never committed.
+```
+cmd/http_server ──► internal/server ──► internal/response
+       │                                       ▲
+       ├──────────► internal/app ──────────────┘
+       │                  │
+       └──────────► internal/filestore ◄───────┘
+```
+
+`main` (in `cmd/http_server`) wires the layers together. The document root is the constant
+`docRoot` (`./data`). Before the server starts, `main` creates the directory with
+`os.MkdirAll(docRoot, 0o755)` and calls `removeTempFiles`. Git ignores `data/`, so its
+contents are never committed.
 
 ## Build and run locally
 
@@ -89,7 +105,7 @@ Requires Go 1.27.3 or later (see `go.mod`). From the `lab01` folder:
 
 ```bash
 go vet ./...
-go build -o http_server .
+go build -o http_server ./cmd/http_server
 ./http_server 8080
 ```
 
@@ -118,8 +134,8 @@ press Ctrl+C.
 
 ## Run with Docker or Podman
 
-The `Dockerfile` compiles a static binary in a `golang:1.27.3` stage and copies it into an
-`alpine` image. The working directory in the image is `/app`, so the document root is
+The `Dockerfile` compiles a static binary from `./cmd/http_server` in a `golang:1.27.3` stage
+and copies it into an `alpine` image. The working directory in the image is `/app`, so the document root is
 `/app/data`. That directory is empty in the image.
 
 ```bash
@@ -330,14 +346,14 @@ rm -f scripts/A.txt scripts/B.txt scripts/got_*.txt data/big.txt
 Build with the race detector, start the server and run the atomicity script against it:
 
 ```bash
-go build -race -o http_server .
+go build -race -o http_server ./cmd/http_server
 ./http_server 8080
 ```
 
 In a second terminal, run `(cd scripts && bash atomic.sh)`. If the race detector finds a data
 race, the server prints `WARNING: DATA RACE` to standard error. With the current code it
 prints nothing beyond the normal request log. Rebuild without `-race` afterwards
-(`go build -o http_server .`).
+(`go build -o http_server ./cmd/http_server`).
 
 ## Design decisions
 
@@ -361,9 +377,9 @@ prints nothing beyond the normal request log. Rebuild without `-race` afterwards
     deadline by 1 second and sends `408 Request Timeout`.
   - If it expires later, for example while a `POST` body is being received, no response can be
     sent anymore: the error is logged and the connection is closed.
-- **Document root setup.** The root path is the single constant `docRoot` in `main.go`. `main`
-  creates it with `os.MkdirAll` before the server starts, so a fresh clone works without
-  manual setup. If it cannot be created, the server exits.
+- **Document root setup.** The root path is the single constant `docRoot` in
+  `cmd/http_server/main.go`. `main` creates it with `os.MkdirAll` before the server starts,
+  so a fresh clone works without manual setup. If it cannot be created, the server exits.
 - **Startup cleanup of temporary files.** If the process stops during an upload, its
   `tmp-*` file stays on disk, because deferred cleanup does not run. Before the server starts
   accepting connections, `removeTempFiles` deletes these files from `docRoot` and logs how

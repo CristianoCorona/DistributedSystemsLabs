@@ -1,4 +1,7 @@
-package main
+// Package server is the transport layer: it accepts TCP connections, bounds how many are
+// handled at the same time and parses one HTTP request per connection. It knows nothing
+// about files: every well-formed request is passed to a Handler.
+package server
 
 import (
 	"bufio"
@@ -9,22 +12,29 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
 )
+
+// Handler is called for every well-formed request. It writes the response to conn.
+// It is a plain function type, so the application layer does not need to import this
+// package: any method with the same signature, such as (*app.App).Route, can be passed.
+type Handler func(conn net.Conn, req *http.Request)
 
 // Server is a minimal HTTP server built directly on TCP sockets.
 // It serves one request per connection and bounds the number of
 // connections handled concurrently.
 type Server struct {
-	addr    string                                 // address to listen on, in "host:port" form
-	sem     chan struct{}                          // counting semaphore, one slot per active connection
-	handler func(conn net.Conn, req *http.Request) // called for every well-formed request
-	timeout time.Duration                          // per-connection deadline, in seconds
+	addr    string        // address to listen on, in "host:port" form
+	sem     chan struct{} // counting semaphore, one slot per active connection
+	handler Handler       // called for every well-formed request
+	timeout time.Duration // per-connection deadline, in seconds
 }
 
-// NewServer returns a Server that listens on addr, handles at most maxConns
+// New returns a Server that listens on addr, handles at most maxConns
 // connections at the same time and passes valid requests to h.
 // A connection that does not complete within timeout seconds is closed.
-func NewServer(addr string, maxConns int, h func(net.Conn, *http.Request), timeout time.Duration) *Server {
+func New(addr string, maxConns int, h Handler, timeout time.Duration) *Server {
 	return &Server{
 		addr:    addr,
 		sem:     make(chan struct{}, maxConns),
@@ -88,10 +98,10 @@ func (s *Server) handleConn(conn net.Conn) {
 		case errors.Is(err, os.ErrDeadlineExceeded):
 			log.Println("Timeout waiting for request from", conn.RemoteAddr())
 			conn.SetWriteDeadline(time.Now().Add(time.Second)) // set a short deadline to write the error response
-			writeError(conn, http.StatusRequestTimeout)        //notify the client
+			response.Error(conn, http.StatusRequestTimeout)    //notify the client
 		default:
 			log.Println("Bad request from", conn.RemoteAddr(), ":", err)
-			writeError(conn, http.StatusBadRequest)
+			response.Error(conn, http.StatusBadRequest)
 		}
 		return
 	}

@@ -6,7 +6,7 @@ WORKDIR /src
 COPY . .
 
 # CGO_ENABLED=0 produces a statically linked binary.
-RUN CGO_ENABLED=0 GOOS=linux go build -o /http_server .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /http_server ./cmd/http_server
 
 # --- Stage 2: run --- Smaller stage
 FROM alpine:latest

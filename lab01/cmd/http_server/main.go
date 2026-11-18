@@ -1,3 +1,10 @@
+// Command http_server is a concurrent HTTP/1.0 file server built on TCP sockets.
+//
+// Usage:
+//
+//	http_server <port>
+//
+// It serves and stores files in ./data, relative to the working directory.
 package main
 
 import (
@@ -6,14 +13,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/filestore"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/app"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/server"
 )
 
 // docRoot is the directory from which files are served and in which they are stored.
 // It is relative to the working directory of the process.
 const docRoot = "./data"
 
-// Dummy test main
+// main checks the arguments, prepares the document root and wires the layers together:
+// the server (transport) calls the app (protocol), which uses the file store (domain).
 func main() {
 	// Validation of the port (argument)
 	if len(os.Args) != 2 {
@@ -27,9 +37,9 @@ func main() {
 	}
 	removeTempFiles(docRoot)
 
-	// Dummy handler that responds with a simple message indicating the requested method and path.
-	my_app := &app{files: filestore.New(docRoot)} // Initialize the app with a file store rooted at docRoot
-	srv := NewServer(":"+port, 10, my_app.route, 5)
+	// The app answers each request using a file store rooted at docRoot.
+	application := app.New(filestore.New(docRoot))
+	srv := server.New(":"+port, 10, application.Route, 5)
 	log.Fatal(srv.Serve())
 }
 
