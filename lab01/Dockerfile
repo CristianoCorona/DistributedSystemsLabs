@@ -9,7 +9,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /http_server ./cmd/http_server
 
 # --- Stage 2: run --- Smaller stage
-FROM alpine:latest
+FROM alpine:3.24.4
 WORKDIR /app
 COPY --from=build /http_server .
 RUN mkdir data

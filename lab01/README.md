@@ -30,8 +30,8 @@ This table covers the Basic part of `docs/assignment.md`.
 |---|---|---|
 | A new goroutine for each client | `Server.Serve` (`internal/server`) | After each `Accept`, `Serve` starts a goroutine that runs `Server.handleConn`. |
 | Binary called `http_server`, port as first argument, no hard-coded port | `main` (`cmd/http_server`) | Build with `go build -o http_server ./cmd/http_server`. With anything other than exactly one argument, or with a port that is not an integer from 1 to 65535, the program logs `Usage: ./http_server <port>` and exits with status 1. |
-| Compiles without errors or warnings | the whole module | `go build`, `go vet ./...` and `gofmt -l .` produce no output. |
-| No fixed IP address for the server or its clients | `main`, `Server.Serve` | Listens on `":" + port`, which means all interfaces (IPv4 and IPv6). Client addresses are not checked. |
+| Compiles without errors or warnings | the whole module | `go build ./...`, `go vet ./...` and `gofmt -l .` produce no output, and `go test -race ./...` passes. |
+| No fixed IP address for the server or its clients | `main`, `Server.Serve` | Listens on `:<port>`, which means all interfaces (IPv4 and IPv6). Client addresses are not checked. |
 | Networking with `net` only | `Server.Serve` | `net.Listen("tcp", addr)` and `listener.Accept()`. |
 | `net/http` only for parsing | `Server.handleConn`, `response.Stream` (`internal/response`) | `http.ReadRequest` parses the request. The status line and headers are written with `fmt.Fprintf`. `http.Response`, `http.Serve` and `http.ListenAndServe` are not used. |
 | At most 10 concurrent connections; wait when the limit is reached | `server.New`, `Server.Serve` | The `Server.sem` field is a buffered channel with capacity `Config.MaxConns`, 10 (set in `main`), that works as a counting semaphore. A slot is taken **before** `Accept` and released when the connection goroutine returns. |
@@ -46,7 +46,7 @@ This table covers the Basic part of `docs/assignment.md`.
 | Concurrent `POST`s are atomic; `GET` sees one complete version | `Store.Put` | Write to a temporary file, `fsync` it, then `os.Rename`. See [Atomic POST](#atomic-post). |
 | Well-formed error responses | `response.Error` (`internal/response`) | Every error is a full HTTP/1.0 response with `Content-Type: text/plain`, `Content-Length` and a body that holds the status text (for example `Not Found`). |
 | No web frameworks | `go.mod` | No dependencies outside the standard library. |
-| Containers (recommended) | `Dockerfile` | Multi-stage build. See [Run with Docker or Podman](#run-with-docker-or-podman). |
+| Containers (recommended) | `Dockerfile` | Multi-stage build; the runtime image is pinned to `alpine:3.24.4`. See [Run with Docker or Podman](#run-with-docker-or-podman). |
 
 ## Project structure and layering
 
@@ -145,8 +145,9 @@ press Ctrl+C.
 ## Run with Docker or Podman
 
 The `Dockerfile` compiles a static binary from `./cmd/http_server` in a `golang:1.27.3` stage
-and copies it into an `alpine` image. The working directory in the image is `/app`, so the
-document root is `/app/data`. That directory is empty in the image.
+and copies it into an `alpine:3.24.4` image. Both base images are pinned to exact versions,
+so a rebuild later produces the same environment. The working directory in the image is
+`/app`, so the document root is `/app/data`. That directory is empty in the image.
 
 ```bash
 docker build -t http_server .
@@ -348,8 +349,8 @@ timing, and the functional checks below cover it.
 ### Functional checks
 
 The curl and nc commands above cover each status code the server can return: `200`, `201`,
-`400`, `404`, `408` and `501`. To check the connection limit, open 10 connections that send nothing,
-then make an eleventh request:
+`400`, `404`, `408` and `501`. To check the connection limit, open 10 connections that send
+nothing, then make an eleventh request:
 
 ```bash
 for i in $(seq 10); do (sleep 8 | nc localhost 8080 > /dev/null) & done
@@ -468,9 +469,10 @@ prints nothing beyond the normal request log. Rebuild without `-race` afterwards
   a directory whose name has an allowed extension (for example `data/photos.jpg/`) answers
   `404 Not Found`.
 - **Path handling.** `Store.resolve` cleans the URL path with `filepath.Clean("/" + path)`
-  and joins it to `docRoot`. `..` segments therefore stop at the root. Subdirectories of
-  `data/` work if they exist. A `POST` to a missing subdirectory fails with `400`. The server
-  never creates subdirectories.
+  and joins it to the root of the store (`docRoot`). Cleaning it as an absolute path makes
+  `..` segments stop at the root, even for a name passed without the leading `/`.
+  Subdirectories of `data/` work if they exist. A `POST` to a missing subdirectory fails with
+  `400`. The server never creates subdirectories.
 - **Extension matching.** Extensions are matched case-insensitively, so `IMAGE.JPG` is
   accepted as `image/jpeg`. File names stay case-sensitive, as on the Linux filesystem:
   `INDEX.HTML` and `index.html` are different files.
