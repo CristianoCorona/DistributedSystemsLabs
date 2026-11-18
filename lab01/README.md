@@ -7,11 +7,15 @@ directly on TCP sockets from the `net` package. From `net/http` it uses only
 `http.ReadRequest` to parse requests and the status code constants and `http.StatusText`.
 Responses are written by hand.
 
-- `GET` returns a file from the document root `./data`.
-- `POST` stores the request body as a file in `./data`. The update is atomic.
+- `GET` returns a file from the document root `./data`. The file is streamed from disk, not
+  loaded into memory.
+- `POST` stores the request body as a file in `./data` and answers `201 Created`. The update
+  is atomic, and the data is flushed to disk before it becomes visible.
 - Each connection is handled in its own goroutine. At most 10 connections are handled at the
   same time.
 - Each connection carries one request and is then closed.
+- A client has 5 seconds to send the request line and the headers, then 60 more seconds to
+  send the body and read the response.
 - At startup the server creates `./data` if it is missing and removes temporary upload files
   left behind by a previous run.
 
@@ -25,21 +29,21 @@ This table covers the Basic part of `docs/assignment.md`.
 | Requirement | Where | How |
 |---|---|---|
 | A new goroutine for each client | `Server.Serve` (`internal/server`) | After each `Accept`, `Serve` starts a goroutine that runs `Server.handleConn`. |
-| Binary called `http_server`, port as first argument, no hard-coded port | `main` (`cmd/http_server`) | Build with `go build -o http_server ./cmd/http_server`. With anything other than exactly one argument, the program logs `Usage: ./http_server <port>` and exits with status 1. |
+| Binary called `http_server`, port as first argument, no hard-coded port | `main` (`cmd/http_server`) | Build with `go build -o http_server ./cmd/http_server`. With anything other than exactly one argument, or with a port that is not an integer from 1 to 65535, the program logs `Usage: ./http_server <port>` and exits with status 1. |
 | Compiles without errors or warnings | the whole module | `go build`, `go vet ./...` and `gofmt -l .` produce no output. |
 | No fixed IP address for the server or its clients | `main`, `Server.Serve` | Listens on `":" + port`, which means all interfaces (IPv4 and IPv6). Client addresses are not checked. |
 | Networking with `net` only | `Server.Serve` | `net.Listen("tcp", addr)` and `listener.Accept()`. |
-| `net/http` only for parsing | `Server.handleConn`, `response.Write` (`internal/response`) | `http.ReadRequest` parses the request. The status line and headers are written with `fmt.Fprintf`. `http.Response`, `http.Serve` and `http.ListenAndServe` are not used. |
-| At most 10 concurrent connections; wait when the limit is reached | `server.New`, `Server.Serve` | The `Server.sem` field is a buffered channel with capacity 10 (set in `main`) that works as a counting semaphore. A slot is taken **before** `Accept` and released when the connection goroutine returns. |
+| `net/http` only for parsing | `Server.handleConn`, `response.Stream` (`internal/response`) | `http.ReadRequest` parses the request. The status line and headers are written with `fmt.Fprintf`. `http.Response`, `http.Serve` and `http.ListenAndServe` are not used. |
+| At most 10 concurrent connections; wait when the limit is reached | `server.New`, `Server.Serve` | The `Server.sem` field is a buffered channel with capacity `Config.MaxConns`, 10 (set in `main`), that works as a counting semaphore. A slot is taken **before** `Accept` and released when the connection goroutine returns. |
 | Check that the request is properly formatted | `Server.handleConn` | If `http.ReadRequest` fails (malformed request line or headers), the server answers `400 Bad Request`. |
 | Serve `html`, `txt`, `gif`, `jpeg`, `jpg`, `css` with the right `Content-Type` | `mimeTypes`, `Store.resolve` (`internal/filestore`) | `mimeTypes` maps `.html`→`text/html`, `.txt`→`text/plain`, `.gif`→`image/gif`, `.jpeg`/`.jpg`→`image/jpeg` and `.css`→`text/css`. |
 | Any other extension → 400 | `Store.resolve`, `App.serveFile`, `App.storeFile` (`internal/app`) | `resolve` returns `ErrBadExtension`, which the handlers map to `400` for both `GET` and `POST`. Files with no extension are also rejected. |
-| File does not exist → 404 | `Store.Get`, `App.serveFile` | `os.ErrNotExist` becomes `ErrNotFound`, which the handler maps to `404`. |
+| File does not exist → 404 | `Store.Get`, `App.serveFile` | `os.ErrNotExist` becomes `ErrNotFound`, which the handler maps to `404`. A directory whose name has an allowed extension is also reported as `ErrNotFound`. |
 | `GET` and `POST` implemented; other valid methods → 501 | `knownMethods`, `App.Route` (`internal/app`) | The nine methods of RFC 9110 and RFC 5789 are known. `GET` and `POST` are dispatched to handlers. The other seven get `501 Not Implemented`. |
 | Invalid request → 400 | `App.Route`, `Server.handleConn` | An unknown method (for example `FOO`) or an unparsable request gets `400`. |
 | Any other error condition → 400 | `App.serveFile`, `App.storeFile` | Unexpected filesystem errors are logged and answered with `400`. |
-| `POST` stores the file and a later `GET` returns it | `App.storeFile`, `Store.Put` | `Put` writes the body to `data/<path>`. A successful `POST` returns `200 OK`. |
-| Concurrent `POST`s are atomic; `GET` sees one complete version | `Store.Put` | Write to a temporary file, then `os.Rename`. See [Atomic POST](#atomic-post). |
+| `POST` stores the file and a later `GET` returns it | `App.storeFile`, `Store.Put` | `Put` writes the body to `data/<path>`. A successful `POST` returns `201 Created`. |
+| Concurrent `POST`s are atomic; `GET` sees one complete version | `Store.Put` | Write to a temporary file, `fsync` it, then `os.Rename`. See [Atomic POST](#atomic-post). |
 | Well-formed error responses | `response.Error` (`internal/response`) | Every error is a full HTTP/1.0 response with `Content-Type: text/plain`, `Content-Length` and a body that holds the status text (for example `Not Found`). |
 | No web frameworks | `go.mod` | No dependencies outside the standard library. |
 | Containers (recommended) | `Dockerfile` | Multi-stage build. See [Run with Docker or Podman](#run-with-docker-or-podman). |
@@ -50,13 +54,14 @@ This table covers the Basic part of `docs/assignment.md`.
 lab01/
 ├── cmd/
 │   └── http_server/
-│       └── main.go       # argument check, document root setup, temp file cleanup, wiring
+│       └── main.go       # argument and port check, configuration, wiring
 ├── internal/
-│   ├── server/           # TCP listener, connection limit, deadline, request parsing
+│   ├── server/           # TCP listener, connection limit, two-phase deadline, request parsing
 │   ├── app/              # method validation and dispatch, GET and POST handlers,
 │   │                     # error -> status code mapping
-│   ├── response/         # writes HTTP/1.0 responses
-│   └── filestore/        # extension check, path cleaning, file read, atomic write
+│   ├── response/         # writes HTTP/1.0 responses, streaming the body
+│   └── filestore/        # root setup and temp file cleanup, extension check, path cleaning,
+│                         # streaming read, atomic and durable write
 ├── docs/
 │   └── assignment.md     # lab text
 ├── scripts/
@@ -73,18 +78,20 @@ code outside `lab01` from importing it, and the package boundaries decide what i
 only the names the other layers need are exported. Dependencies go downwards only.
 
 1. **Transport** (package `server`): accepts TCP connections, enforces the connection limit
-   and the deadline, and parses the request with `http.ReadRequest`. It does not know about
-   files. It passes each parsed request to a `server.Handler`, a plain function type
-   `func(net.Conn, *http.Request)`. It uses `response.Error` for the errors it answers itself
-   (`400` and `408`).
+   and the two-phase deadline set in a `server.Config`, and parses the request with
+   `http.ReadRequest`. It does not know about files. It passes each parsed request to a
+   `server.Handler`, a plain function type `func(net.Conn, *http.Request)`. It uses
+   `response.Error` for the errors it answers itself (`400` and `408`).
 2. **Protocol** (package `app`, plus package `response`): `App.Route` decides what to do with
    a request, and the unexported handlers `serveFile` and `storeFile` map errors from the
-   domain layer to status codes. `response.Write` and `response.Error` serialize the answer.
-   `app` does not import `server`: `main` passes the method value `App.Route` to the server,
-   and it matches `server.Handler` because the signatures are the same.
-3. **Domain** (package `filestore`): `Store.Get` and `Store.Put` resolve a URL path to a file
-   under the root directory and read or write it. They return the errors `ErrNotFound` and
-   `ErrBadExtension` and do not know about HTTP.
+   domain layer to status codes. `response.Stream`, `response.Write` and `response.Error`
+   serialize the answer. `app` does not import `server`: `main` passes the method value
+   `App.Route` to the server, and it matches `server.Handler` because the signatures are the
+   same.
+3. **Domain** (package `filestore`): `filestore.Open` prepares the root directory.
+   `Store.Get` and `Store.Put` resolve a URL path to a file under the root directory; `Get`
+   opens it for streaming and `Put` replaces it atomically. They return the errors
+   `ErrNotFound` and `ErrBadExtension` and do not know about HTTP.
 
 ```
 cmd/http_server ──► internal/server ──► internal/response
@@ -95,9 +102,11 @@ cmd/http_server ──► internal/server ──► internal/response
 ```
 
 `main` (in `cmd/http_server`) wires the layers together. The document root is the constant
-`docRoot` (`./data`). Before the server starts, `main` creates the directory with
-`os.MkdirAll(docRoot, 0o755)` and calls `removeTempFiles`. Git ignores `data/`, so its
-contents are never committed.
+`docRoot` (`./data`). Before the server starts, `main` calls `filestore.Open(docRoot)`, which
+creates the directory with `os.MkdirAll(root, 0o755)` and removes the temporary files of
+interrupted uploads. The `tmp-*` naming of those files is an internal detail of `filestore`,
+so `main` does not need to know about it. Git ignores `data/`, so its contents are never
+committed.
 
 ## Build and run locally
 
@@ -116,7 +125,7 @@ The server prints two lines at startup:
 2026/11/16 00:51:08 Listening on :8080
 ```
 
-- The only argument is the TCP port.
+- The only argument is the TCP port, an integer from 1 to 65535.
 - Files are read from and written to `./data`, relative to the **current working directory**.
   Start the server from `lab01`, or it will create and use a different `data` directory.
 - If `./data` does not exist, the server creates it with mode `0755`. If it cannot (for
@@ -124,8 +133,8 @@ The server prints two lines at startup:
   `Cannot create document root: ...` and exits with status 1.
 - The server logs one line for each request (`Received request: GET /index.html`) and one
   for each error to standard error.
-- The connection limit (10) and the timeout (5 seconds) are fixed in `main`. They cannot be
-  set on the command line.
+- The connection limit (10) and the timeouts (5 seconds for the headers, 60 seconds for the
+  rest of the request) are fixed in `main`. They cannot be set on the command line.
 
 To stop the server, press Ctrl+C. The process exits at once and the operating system frees
 the port. There is no graceful shutdown: requests in progress are cut off. Ctrl+Z only
@@ -135,8 +144,8 @@ press Ctrl+C.
 ## Run with Docker or Podman
 
 The `Dockerfile` compiles a static binary from `./cmd/http_server` in a `golang:1.27.3` stage
-and copies it into an `alpine` image. The working directory in the image is `/app`, so the document root is
-`/app/data`. That directory is empty in the image.
+and copies it into an `alpine` image. The working directory in the image is `/app`, so the
+document root is `/app/data`. That directory is empty in the image.
 
 ```bash
 docker build -t http_server .
@@ -195,7 +204,7 @@ curl -i localhost:8080/hello.txt
 ```
 
 ```
-HTTP/1.0 200 OK
+HTTP/1.0 201 Created
 Content-Type: text/plain
 Content-Length: 25
 Connection: close
@@ -274,31 +283,39 @@ printf 'GET /hello.txt HTTP/1.1\r\nHost: x\r\nno colon\r\n\r\n' | nc localhost 8
 printf 'GET /hello.txt HTTP/1.0\r\n\r\n' | nc localhost 8080                # 200 OK, body "hello"
 ```
 
-Timeout. Each connection has a 5-second deadline:
+Timeouts. A client has 5 seconds to send the request line and the headers. Once they are
+parsed, a new 60-second deadline covers the body and the response:
 
 ```bash
 sleep 7 | nc localhost 8080                                         # nothing sent: 408 Request Timeout after 5 s
 (printf 'GET /hello.txt HTTP/1.1\r\n'; sleep 7) | nc localhost 8080   # headers never finished: 408 after 5 s
-(printf 'POST /slow.txt HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc'; sleep 7) | nc localhost 8080   # body incomplete: no response, connection closed after 5 s
+(printf 'POST /slow.txt HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc'; sleep 7; printf 'defghij'; sleep 1) | nc localhost 8080   # slow body: 201 Created after 7 s
+(printf 'POST /cut.txt HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc'; sleep 7) | nc localhost 8080   # body cut short: 400 Bad Request after 7 s
 ```
 
-`nc` exits when `sleep` ends, about 7 seconds after it starts. The response arrives after 5
-seconds. If the client connects and closes without sending anything
-(`nc localhost 8080 < /dev/null`), the server logs it and closes the connection without a
-response. In the last case nothing is stored and no temporary file remains.
+In the first two commands the response arrives after 5 seconds; `nc` exits when `sleep` ends,
+about 7 seconds after it starts. The third body pauses for longer than the header timeout but
+finishes well within 60 seconds, so `data/slow.txt` is stored with the content `abcdefghij`.
+In the fourth, `nc` closes its side of the connection when `sleep` ends: the server reaches
+the end of the stream after 3 of the 10 announced bytes, logs `Error storing file: unexpected
+EOF` and answers `400`. Nothing is stored and no temporary file remains. A client that stays
+connected without finishing its body gets no response: after 60 seconds the server logs an
+`i/o timeout` and closes the connection. If the client connects and closes without sending
+anything (`nc localhost 8080 < /dev/null`), the server logs it and closes the connection
+without a response.
 
 ### Clean up
 
 ```bash
-rm -f data/hello.txt data/page.html data/sample.jpg sample.jpg out.jpg
+rm -f data/hello.txt data/page.html data/sample.jpg data/slow.txt sample.jpg out.jpg
 ```
 
 ## Testing
 
 ### Functional checks
 
-The curl and nc commands above cover each status code the server can return: `200`, `400`,
-`404`, `408` and `501`. To check the connection limit, open 10 connections that send nothing,
+The curl and nc commands above cover each status code the server can return: `200`, `201`,
+`400`, `404`, `408` and `501`. To check the connection limit, open 10 connections that send nothing,
 then make an eleventh request:
 
 ```bash
@@ -310,8 +327,9 @@ wait
 
 The eleventh connection is established at once (the kernel accepts it into the listen
 backlog). The server reads it only when a slot frees up, which happens when the 10 idle
-connections time out. Expected output: a line like `404 after 4.498701s`. If you repeat the
-test with 9 idle connections, the answer is immediate.
+connections reach the 5-second header timeout. Expected output: a line like
+`404 after 4.498701s`. If you repeat the test with 9 idle connections, the answer is
+immediate.
 
 ### Atomicity
 
@@ -369,30 +387,53 @@ prints nothing beyond the normal request log. Rebuild without `-race` afterwards
   before `listener.Accept()`, not inside the goroutine. While 10 connections are active, the
   server does not call `Accept`. New clients wait in the kernel backlog and their deadline has
   not started yet. If `Accept` fails, the slot is returned at once.
-- **One deadline for the whole connection.** Right after `Accept`, `Server.handleConn` calls
-  `conn.SetDeadline` with a 5-second deadline for reads and writes. It covers reading the
-  request line, the headers and the body, and writing the response. A slow or idle client
-  cannot hold a slot for more than about 5 seconds.
-  - If the deadline expires before the headers have been parsed, the server extends the write
-    deadline by 1 second and sends `408 Request Timeout`.
-  - If it expires later, for example while a `POST` body is being received, no response can be
-    sent anymore: the error is logged and the connection is closed.
+- **Two-phase deadline.** `server.Config` holds two durations, and `Server.handleConn` sets
+  them one after the other with `conn.SetDeadline`, which covers reads and writes.
+  - `HeaderTimeout` (5 s) starts right after `Accept` and covers the request line and the
+    headers. A well-behaved client sends them at once, so an idle client loses its slot
+    quickly. If it expires, the server sets a fresh 1-second write deadline and sends
+    `408 Request Timeout`.
+  - `RequestTimeout` (60 s) starts when the headers have been parsed and covers reading the
+    body and writing the response. It is longer because a large file over a slow link
+    legitimately takes time. If it expires, for example while a `POST` body is being received,
+    no response can be sent anymore: the error is logged and the connection is closed.
+  - A read deadline alone would not be enough: a client that sends a request and never reads
+    the response would block the server's write once the socket buffers are full, and hold
+    the slot forever. `SetDeadline` bounds the write too.
+  - A single deadline for the whole connection would force a choice between a short value,
+    which cuts off large transfers, and a long one, which lets idle clients hold slots.
+- **Port validation.** The argument must be an integer from 1 to 65535. Port 0 is rejected:
+  `net.Listen` would pick a random free port, and clients would not know where to connect.
+  The parsed number is used to build the address, so `+80` or `080` both listen on `:80`.
 - **Document root setup.** The root path is the single constant `docRoot` in
-  `cmd/http_server/main.go`. `main` creates it with `os.MkdirAll` before the server starts,
-  so a fresh clone works without manual setup. If it cannot be created, the server exits.
+  `cmd/http_server/main.go`. `main` passes it to `filestore.Open`, which creates it with
+  `os.MkdirAll` before the server starts, so a fresh clone works without manual setup. If it
+  cannot be created, the server exits.
 - **Startup cleanup of temporary files.** If the process stops during an upload, its
   `tmp-*` file stays on disk, because deferred cleanup does not run. Before the server starts
-  accepting connections, `removeTempFiles` deletes these files from `docRoot` and logs how
+  accepting connections, `filestore.Open` deletes these files from the root and logs how
   many it removed. It only deletes regular files named `tmp-` followed by digits, the form
   `os.CreateTemp` produces. A client file such as `tmp-notes.txt` is kept. Subdirectories are
   not scanned.
 - **File permissions.** Every stored file gets mode `0644` (owner read/write, everyone
   read), whether it is new or replaces an existing file. `os.CreateTemp` would otherwise
   leave it at `0600`.
-- **`POST` status.** A successful `POST` returns `200 OK` with the body
-  `File stored successfully.`, for both new and replaced files. To tell the two cases apart,
-  the server would have to check whether the file exists before the rename, and with
-  concurrent uploads that check could be outdated by the time of the rename.
+- **`POST` status.** A successful `POST` returns `201 Created` with the body
+  `File stored successfully.`: the body is now a resource that a later `GET` returns. The
+  same status is used for new and replaced files. To tell the two cases apart (and answer
+  `200 OK` for a replacement), the server would have to check whether the file exists before
+  the rename, and with concurrent uploads that check could be outdated by the time of the
+  rename.
+- **Streaming `GET`.** `Store.Get` opens the file and returns the open descriptor, its size
+  (from `Stat` on the descriptor) and its `Content-Type`. `response.Stream` writes the headers
+  with `Content-Length` equal to that size and copies the file to the connection with
+  `io.Copy`, so memory use does not grow with the file size. On Linux `io.Copy` from a file to
+  a TCP connection uses `sendfile`, so the data does not pass through user space.
+  `serveFile` closes the file when the copy ends. `response.Write`, used for the short
+  messages, is `Stream` with a body held in memory.
+- **Directories are not files.** On Linux a directory can be opened like a file. A `GET` for
+  a directory whose name has an allowed extension (for example `data/photos.jpg/`) answers
+  `404 Not Found`.
 - **Path handling.** `Store.resolve` cleans the URL path with `filepath.Clean("/" + path)`
   and joins it to `docRoot`. `..` segments therefore stop at the root. Subdirectories of
   `data/` work if they exist. A `POST` to a missing subdirectory fails with `400`. The server
@@ -433,10 +474,11 @@ example, a second container that shares the volume.
 
 **Chosen approach: write a temporary file, then rename it.** `Store.Put` never modifies the
 visible file. It creates a temporary file in the same directory as the target with
-`os.CreateTemp(dir, "tmp-*")`, copies the body into it with `io.Copy`, sets mode `0644` and
-closes it, then replaces the target with `os.Rename`. It checks the error from closing the
-file, because some write errors only appear then. If any step fails, a deferred `os.Remove`
-deletes the temporary file and the target is left unchanged.
+`os.CreateTemp(dir, "tmp-*")`, copies the body into it with `io.Copy`, sets mode `0644`,
+flushes it to disk with `Sync` and closes it, then replaces the target with `os.Rename`. It
+checks the error from closing the file, because some write errors only appear then. If any
+step fails, a deferred `os.Remove` deletes the temporary file and the target is left
+unchanged.
 
 **Why rename is atomic.** A file name is a directory entry that points to an inode.
 `rename(2)` switches the entry from the old inode to the new one in a single step. A `GET`
@@ -453,10 +495,19 @@ number, so a temporary file has a name like `tmp-1850080396`, with no extension.
 extension check rejects any request for such a name with `400` before the filesystem is
 accessed, so a `GET` can never return a half-written upload.
 
-**Atomicity is not durability.** The rename makes the new version visible atomically, but the
-data is not `fsync`ed. After an operating system crash or a power loss, the new file may be
-empty or incomplete. Calling `Sync()` on the temporary file before closing it would prevent
-this, at the cost of slower uploads.
+**Streaming reads stay atomic.** `Store.Get` does not read the whole file before answering:
+it keeps the descriptor open while the data is sent. This is still safe, because `Put` never
+writes into a visible file. If a `POST` renames a new version over the name during the copy,
+the descriptor keeps pointing to the old inode, which stays intact until it is closed. The
+size taken from `Stat` on that descriptor therefore matches the bytes that are sent.
+
+**Atomicity and durability.** The rename makes the new version visible atomically. Atomicity
+alone does not survive a crash: written data first goes to the kernel's page cache, so after
+an operating system crash or a power loss a renamed file could be empty or incomplete. `Put`
+therefore calls `Sync()` on the temporary file before closing and renaming it, and checks its
+error. Uploads are slower, because each one waits for the disk. The directory itself is not
+synced, so after a crash the rename may be lost: the old version is then still in place,
+complete.
 
 The [atomicity test](#atomicity) checks this behaviour.
 
@@ -465,13 +516,14 @@ The [atomicity test](#atomicity) checks this behaviour.
 - **No graceful shutdown.** Ctrl+C or `SIGTERM` ends the process at once, and requests in
   progress are cut off. Temporary files left in `data/` are removed at the next startup, but
   only from the top level of `data/`, not from its subdirectories.
-- **No resource limits on transfers.** The server does not limit the size of a `POST` body, so
-  a client can fill the disk. `Store.Get` reads each file into memory before sending it, so
-  memory use grows with file size and with the number of concurrent `GET`s.
-- **The 5-second deadline is fixed and covers the whole transfer.** A large upload or download
-  over a slow link is cut off after 5 seconds. An upload cut off this way gets no response.
-  Ten clients that connect and send nothing block all other clients for up to 5 seconds.
-- **Atomic but not durable.** Stored files are not `fsync`ed. See [Atomic POST](#atomic-post).
+- **No size limit on uploads.** The server does not limit the size of a `POST` body, so a
+  client can fill the disk.
+- **The timeouts are fixed.** A transfer that needs more than 60 seconds after the headers is
+  cut off; an upload cut off this way gets no response. Ten clients that connect and send
+  nothing block all other clients for up to 5 seconds.
+- **The rename is not synced.** File contents are flushed to disk, but the directory is not,
+  so a crash right after a `POST` may bring back the previous version. See
+  [Atomic POST](#atomic-post).
 - **Missing `Host` header is accepted.** HTTP/1.1 requires a `Host` header, but
   `http.ReadRequest` does not enforce it, and the server answers such requests normally.
 - **Bonus part not implemented.** There is no pub-sub broker.

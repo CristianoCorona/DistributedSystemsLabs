@@ -21,6 +21,20 @@ import (
 // package: any method with the same signature, such as (*app.App).Route, can be passed.
 type Handler func(conn net.Conn, req *http.Request)
 
+// Config holds the limits of a Server.
+type Config struct {
+	// MaxConns is the maximum number of connections handled at the same time.
+	MaxConns int
+	// HeaderTimeout bounds the time a client has to send the request line and the headers.
+	// It is short: a well-behaved client sends them right after connecting, so a client
+	// that stays silent is most likely idle or malicious and must not hold a slot.
+	HeaderTimeout time.Duration
+	// RequestTimeout bounds the rest of the exchange: reading the body and writing the
+	// response. It is longer than HeaderTimeout, because a large upload or download over a
+	// slow link legitimately takes time.
+	RequestTimeout time.Duration
+}
+
 // Server is a minimal HTTP server built directly on TCP sockets.
 // It serves one request per connection and bounds the number of
 // connections handled concurrently.
@@ -28,18 +42,19 @@ type Server struct {
 	addr    string        // address to listen on, in "host:port" form
 	sem     chan struct{} // counting semaphore, one slot per active connection
 	handler Handler       // called for every well-formed request
-	timeout time.Duration // per-connection deadline, in seconds
+	cfg     Config        // timeouts (the connection limit lives in the capacity of sem)
 }
 
-// New returns a Server that listens on addr, handles at most maxConns
+// New returns a Server that listens on addr, handles at most cfg.MaxConns
 // connections at the same time and passes valid requests to h.
-// A connection that does not complete within timeout seconds is closed.
-func New(addr string, maxConns int, h Handler, timeout time.Duration) *Server {
+// A connection is closed if the client does not send its headers within
+// cfg.HeaderTimeout, or if the rest of the exchange takes longer than cfg.RequestTimeout.
+func New(addr string, cfg Config, h Handler) *Server {
 	return &Server{
 		addr:    addr,
-		sem:     make(chan struct{}, maxConns),
+		sem:     make(chan struct{}, cfg.MaxConns),
 		handler: h,
-		timeout: timeout,
+		cfg:     cfg,
 	}
 }
 
@@ -56,7 +71,7 @@ func (s *Server) Serve() error {
 	defer listener.Close()
 	log.Println("Listening on", s.addr)
 	for {
-		s.sem <- struct{}{} // blocks while maxConns connections are active
+		s.sem <- struct{}{} // blocks while MaxConns connections are active
 
 		conn, err := listener.Accept()
 		if err != nil {
@@ -79,12 +94,15 @@ func (s *Server) Serve() error {
 
 // handleConn reads one HTTP request from conn and passes it to the handler.
 // Exactly one request per connection: the connection is always closed on return.
+//
+// The deadline has two phases. Both use SetDeadline, which covers reads and writes:
+// a read deadline alone would let a client that never reads the response hold a slot
+// forever, because the write would block once the socket buffers are full.
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 
-	// The deadline covers reads and writes, so a client that is too slow
-	// to send its request or to read the response cannot hold a slot forever.
-	conn.SetDeadline(time.Now().Add(time.Duration(s.timeout) * time.Second))
+	// Phase 1: the request line and the headers must arrive within HeaderTimeout.
+	conn.SetDeadline(time.Now().Add(s.cfg.HeaderTimeout))
 
 	// http.ReadRequest needs a *bufio.Reader, which reads from the socket in
 	// chunks. Only the request line and headers are parsed here: the body
@@ -97,7 +115,7 @@ func (s *Server) handleConn(conn net.Conn) {
 			log.Println("Connection closed by client without sending a request")
 		case errors.Is(err, os.ErrDeadlineExceeded):
 			log.Println("Timeout waiting for request from", conn.RemoteAddr())
-			conn.SetWriteDeadline(time.Now().Add(time.Second)) // set a short deadline to write the error response
+			conn.SetWriteDeadline(time.Now().Add(time.Second)) // the old deadline has expired: give the error response a short new one
 			response.Error(conn, http.StatusRequestTimeout)    //notify the client
 		default:
 			log.Println("Bad request from", conn.RemoteAddr(), ":", err)
@@ -105,6 +123,11 @@ func (s *Server) handleConn(conn net.Conn) {
 		}
 		return
 	}
+
+	// Phase 2: the headers are in, so the client is active. A new, longer deadline
+	// (measured from now, not from the connection start) covers reading the body in the
+	// handler and writing the response.
+	conn.SetDeadline(time.Now().Add(s.cfg.RequestTimeout))
 
 	s.handler(conn, req)
 }
