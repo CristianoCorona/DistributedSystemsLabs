@@ -62,6 +62,7 @@ lab01/
 │   ├── response/         # writes HTTP/1.0 responses, streaming the body
 │   └── filestore/        # root setup and temp file cleanup, extension check, path cleaning,
 │                         # streaming read, atomic and durable write
+│                         # (app, response and filestore each have a *_test.go file)
 ├── docs/
 │   └── assignment.md     # lab text
 ├── scripts/
@@ -311,6 +312,38 @@ rm -f data/hello.txt data/page.html data/sample.jpg data/slow.txt sample.jpg out
 ```
 
 ## Testing
+
+### Running the tests
+
+The unit tests use only the standard library package `testing`. From the `lab01` folder:
+
+```bash
+go test -race ./...
+```
+
+```
+?   	github.com/CristianoCorona/DistributedSystemsLabs/lab01/cmd/http_server	[no test files]
+ok  	github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/app	1.027s
+ok  	github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore	1.031s
+ok  	github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response	1.024s
+?   	github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/server	[no test files]
+```
+
+Add `-v` to see each test by name. `-race` enables the race detector; the tests also pass
+without it. They never touch `./data` and do not need a running server.
+
+| Package | File | What it covers |
+|---|---|---|
+| `filestore` | `filestore_test.go` | Each test gets its own root from `t.TempDir()`, which `testing` deletes afterwards. `Put` then `Get` returns the same body, size and `Content-Type`; a second `Put` replaces the whole file; the six extensions map to the right `Content-Type`, case-insensitively; other extensions give `ErrBadExtension` and store nothing; a missing file and a directory give `ErrNotFound`; `..` segments, with or without a leading `/`, stay inside the root; stored files have mode `0644`; no `tmp-*` file remains after a successful or a failed `Put`; `Open` creates a missing root and removes only the `tmp-<digits>` files. |
+| `response` | `response_test.go` | `Write`, `Error` and `Stream` write into a `bytes.Buffer`, and the test compares the exact bytes, including `\r\n` and `Content-Length` (also for a binary body). `Stream` reports a body shorter than the declared size. |
+| `app` | `app_test.go` | Requests go to `App.Route` through `net.Pipe()`, an in-memory pair of connected `net.Conn`. An unknown or lowercase method gives `400`, `DELETE` and `PUT` give `501`, a missing file `404`, a bad extension `400` for `GET` and `POST`, a `POST` to a missing directory `400`. A `POST` gives `201 Created`, and a following `GET` returns `200` with the same body and `text/html`. |
+
+`net.Pipe` is synchronous: a `Write` on one end blocks until the other end reads it. The
+`app` tests therefore read the response in a separate goroutine while `Route` writes it;
+reading only after `Route` returned would deadlock on the first `Write`.
+
+The transport layer (`server`) has no unit tests: its behaviour depends on real sockets and
+timing, and the functional checks below cover it.
 
 ### Functional checks
 
