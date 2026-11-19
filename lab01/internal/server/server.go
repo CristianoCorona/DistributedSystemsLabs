@@ -19,7 +19,7 @@ import (
 // Handler is called for every well-formed request. It writes the response to conn.
 // It is a plain function type, so the application layer does not need to import this
 // package: any method with the same signature, such as (*app.App).Route, can be passed.
-type Handler func(conn net.Conn, req *http.Request)
+type Handler func(conn net.Conn, req *http.Request, releaseSlot func(), acquireSlot func())
 
 // Config holds the limits of a Server.
 type Config struct {
@@ -129,5 +129,14 @@ func (s *Server) handleConn(conn net.Conn) {
 	// handler and writing the response.
 	conn.SetDeadline(time.Now().Add(s.cfg.RequestTimeout))
 
-	s.handler(conn, req)
+	releaseSlot := func() { 
+		conn.SetDeadline(time.Now())
+		<-s.sem
+	}
+	acquireSlot := func() {
+		s.sem <- struct{}{}
+		conn.SetDeadline(time.Now().Add(s.cfg.RequestTimeout))
+	}
+
+	s.handler(conn, req, releaseSlot, acquireSlot)
 }

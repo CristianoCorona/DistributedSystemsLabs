@@ -55,3 +55,38 @@ func (a *App) storeFile(conn net.Conn, req *http.Request) {
 		}
 	}
 }
+
+var cont = make(chan struct{}, 1) // TODO: remove, temporary simulation of waiting for event
+
+func (a *App) getEvents(conn net.Conn, req *http.Request, releaseSlot func(), acquireSlot func()) {
+
+	// No events to retrieve, release worker slot
+	releaseSlot()
+	log.Println("Released slot")
+	
+	cont <- struct{}{}
+	cont <- struct{}{}
+
+	// After 12 seconds, acquire a worker slot again to send the response
+	log.Println("Trying to acquire slot")
+	acquireSlot()
+	log.Println("Slot acquired, sending response")
+
+	if err := response.Write(conn, http.StatusOK, "text/plain", []byte("Event received after 12 seconds.")); err != nil {
+		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
+	}
+
+	<-cont
+}
+
+func (a *App) publish(conn net.Conn, req *http.Request) {
+
+	log.Println("Publishing event")
+	<-cont
+	log.Println("Event published, sending response")
+
+	// Handle publish logic here
+	if err := response.Write(conn, http.StatusOK, "text/plain", []byte("Published successfully.")); err != nil {
+		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
+	}
+}

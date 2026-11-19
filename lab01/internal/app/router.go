@@ -51,9 +51,19 @@ func (a *App) Route(conn net.Conn, req *http.Request) {
 	// 3. switch on req.Method for files
 	switch req.Method {
 	case http.MethodGet:
-		a.serveFile(conn, req)
+		switch {
+			case strings.HasPrefix(req.URL.Path, "/events"):
+				a.getEvents(conn, req, releaseSlot, acquireSlot)
+			default:
+				a.serveFile(conn, req)
+		}
 	case http.MethodPost:
-		a.storeFile(conn, req)
+		switch {
+			case strings.HasPrefix(req.URL.Path, "/publish"):
+				a.publish(conn, req)
+			default:
+				a.storeFile(conn, req)
+		}
 	default:
 		// Method present in the standard but not implemented in this lab.
 		// Error 501 is returned.
