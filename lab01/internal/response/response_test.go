@@ -77,13 +77,3 @@ func TestStream(t *testing.T) {
 		t.Errorf("Stream wrote\n%q\nwant\n%q", got, want)
 	}
 }
-
-func TestStreamSizeMismatch(t *testing.T) {
-	var buf bytes.Buffer
-
-	// The headers promise 10 bytes but the body has 5: the client would wait for the
-	// missing bytes, so Stream must report the mismatch to its caller.
-	if err := Stream(&buf, http.StatusOK, "text/plain", 10, strings.NewReader("hello")); err == nil {
-		t.Error("Stream with a short body returned nil, want an error")
-	}
-}

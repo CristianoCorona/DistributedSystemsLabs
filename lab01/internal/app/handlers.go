@@ -50,8 +50,6 @@ func (a *App) storeFile(conn net.Conn, req *http.Request) {
 	default:
 		// The file is stored successfully.
 		// Status 201 Created: the body is now a resource that a later GET returns.
-		// It is used for new and replaced files alike: telling them apart would need an
-		// existence check before the rename, which a concurrent POST could make outdated.
 		if writeErr := response.Write(conn, http.StatusCreated, "text/plain", []byte("File stored successfully.")); writeErr != nil {
 			log.Println("write response:", writeErr) // The client may have closed the connection during the write; log server side.
 		}

@@ -83,16 +83,18 @@ only the names the other layers need are exported. Dependencies go downwards onl
    `http.ReadRequest`. It does not know about files. It passes each parsed request to a
    `server.Handler`, a plain function type `func(net.Conn, *http.Request)`. It uses
    `response.Error` for the errors it answers itself (`400` and `408`).
-2. **Protocol** (package `app`, plus package `response`): `App.Route` decides what to do with
+2. **Application** (package `app`, plus package `response`): `App.Route` decides what to do with
    a request, and the unexported handlers `serveFile` and `storeFile` map errors from the
-   domain layer to status codes. `response.Stream`, `response.Write` and `response.Error`
+   service layer to status codes. `response.Stream`, `response.Write` and `response.Error`
    serialize the answer. `app` does not import `server`: `main` passes the method value
    `App.Route` to the server, and it matches `server.Handler` because the signatures are the
    same.
-3. **Domain** (package `filestore`): `filestore.Open` prepares the root directory.
+3. **Service** (package `filestore`): `filestore.Open` prepares the root directory.
    `Store.Get` and `Store.Put` resolve a URL path to a file under the root directory; `Get`
    opens it for streaming and `Put` replaces it atomically. They return the errors
    `ErrNotFound` and `ErrBadExtension` and do not know about HTTP.
+   This layer holds the components that do not know about HTTP; the pub-sub broker of the
+   Bonus part would belong here too.
 
 ```
 cmd/http_server ──► internal/server ──► internal/response
@@ -336,7 +338,7 @@ without it. They never touch `./data` and do not need a running server.
 | Package | File | What it covers |
 |---|---|---|
 | `filestore` | `filestore_test.go` | Each test gets its own root from `t.TempDir()`, which `testing` deletes afterwards. `Put` then `Get` returns the same body, size and `Content-Type`; a second `Put` replaces the whole file; the six extensions map to the right `Content-Type`, case-insensitively; other extensions give `ErrBadExtension` and store nothing; a missing file and a directory give `ErrNotFound`; `..` segments, with or without a leading `/`, stay inside the root; stored files have mode `0644`; no `tmp-*` file remains after a successful or a failed `Put`; `Open` creates a missing root and removes only the `tmp-<digits>` files. |
-| `response` | `response_test.go` | `Write`, `Error` and `Stream` write into a `bytes.Buffer`, and the test compares the exact bytes, including `\r\n` and `Content-Length` (also for a binary body). `Stream` reports a body shorter than the declared size. |
+| `response` | `response_test.go` | `Write`, `Error` and `Stream` write into a `bytes.Buffer`, and the test compares the exact bytes, including `\r\n` and `Content-Length` (also for a binary body). |
 | `app` | `app_test.go` | Requests go to `App.Route` through `net.Pipe()`, an in-memory pair of connected `net.Conn`. An unknown or lowercase method gives `400`, `DELETE` and `PUT` give `501`, a missing file `404`, a bad extension `400` for `GET` and `POST`, a `POST` to a missing directory `400`. A `POST` gives `201 Created`, and a following `GET` returns `200` with the same body and `text/html`. |
 
 `net.Pipe` is synchronous: a `Write` on one end blocks until the other end reads it. The
@@ -461,8 +463,9 @@ prints nothing beyond the normal request log. Rebuild without `-race` afterwards
 - **Streaming `GET`.** `Store.Get` opens the file and returns the open descriptor, its size
   (from `Stat` on the descriptor) and its `Content-Type`. `response.Stream` writes the headers
   with `Content-Length` equal to that size and copies the file to the connection with
-  `io.Copy`, so memory use does not grow with the file size. On Linux `io.Copy` from a file to
-  a TCP connection uses `sendfile`, so the data does not pass through user space.
+  `io.Copy`, so memory use does not grow with the file size. On Linux, `io.Copy` from a file to
+  a TCP connection uses the `sendfile` system call: the data goes from the page cache to the
+  socket without passing through user space. This was checked with `strace`.
   `serveFile` closes the file when the copy ends. `response.Write`, used for the short
   messages, is `Stream` with a body held in memory.
 - **Directories are not files.** On Linux a directory can be opened like a file. A `GET` for

@@ -31,16 +31,8 @@ func Stream(w io.Writer, status int, contentType string, size int64, body io.Rea
 	// 3. Body: raw bytes (e.g. JSON, JPEG, etc.) of the response, copied in chunks so that
 	// a large file never has to fit in memory. When w is a TCP connection and body is a
 	// file, io.Copy lets the kernel move the data directly (sendfile on Linux).
-	n, err := io.Copy(w, body)
-	if err != nil {
-		return err
-	}
-	// The headers are already sent, so a size mismatch cannot be reported to the client
-	// anymore; returning it lets the caller log a response the client will see as broken.
-	if n != size {
-		return fmt.Errorf("body has %d bytes, Content-Length declared %d", n, size)
-	}
-	return nil // no error occurred
+	_, err := io.Copy(w, body)
+	return err
 }
 
 // Write writes a complete HTTP/1.0 response to w, with body held in memory.

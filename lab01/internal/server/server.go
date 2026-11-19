@@ -23,11 +23,12 @@ type Handler func(conn net.Conn, req *http.Request)
 
 // Config holds the limits of a Server.
 type Config struct {
-	// MaxConns is the maximum number of connections handled at the same time.
+	// MaxConns is the maximum number of connections handled at the same time. The lab asks for 10, but we keep it configurable.
 	MaxConns int
 	// HeaderTimeout bounds the time a client has to send the request line and the headers.
 	// It is short: a well-behaved client sends them right after connecting, so a client
-	// that stays silent is most likely idle or malicious and must not hold a slot.
+	// that stays silent is most likely idle or malicious and must not hold a slot (especially considered we can only handle a limited number
+	//  of concurrent connections).
 	HeaderTimeout time.Duration
 	// RequestTimeout bounds the rest of the exchange: reading the body and writing the
 	// response. It is longer than HeaderTimeout, because a large upload or download over a
@@ -60,7 +61,7 @@ func New(addr string, cfg Config, h Handler) *Server {
 
 // Serve listens on s.addr and handles each connection in its own goroutine.
 // A semaphore slot is acquired before Accept, so once the limit is reached
-// new connections wait in the kernel backlog.
+// new connections wait.
 // Serve returns only if the listener cannot be created or has been closed.
 func (s *Server) Serve() error {
 	listener, err := net.Listen("tcp", s.addr)
@@ -71,7 +72,7 @@ func (s *Server) Serve() error {
 	defer listener.Close()
 	log.Println("Listening on", s.addr)
 	for {
-		s.sem <- struct{}{} // blocks while MaxConns connections are active
+		s.sem <- struct{}{} // blocks while MaxConns connections are active. This is BEFORE the goroutine spawns, so we effectively have at most MaxConns goroutines running at the same time.
 
 		conn, err := listener.Accept()
 		if err != nil {
@@ -84,8 +85,7 @@ func (s *Server) Serve() error {
 		}
 
 		go func() {
-			// defer needs a function call, not a channel operation,
-			// hence the closure.
+			// defer needs a function call, not a channel operation, hence the closure.
 			defer func() { <-s.sem }()
 			s.handleConn(conn)
 		}()
@@ -93,7 +93,7 @@ func (s *Server) Serve() error {
 }
 
 // handleConn reads one HTTP request from conn and passes it to the handler.
-// Exactly one request per connection: the connection is always closed on return.
+// Exactly one request per connection: the connection is always closed on return (REST).
 //
 // The deadline has two phases. Both use SetDeadline, which covers reads and writes:
 // a read deadline alone would let a client that never reads the response hold a slot

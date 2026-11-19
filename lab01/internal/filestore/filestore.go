@@ -1,4 +1,4 @@
-// Package filestore is the domain layer: it maps URL paths to files under a root directory,
+// Package filestore is the service layer: it maps URL paths to files under a root directory,
 // reads them and replaces them atomically. It knows nothing about HTTP: callers translate
 // its errors (ErrNotFound, ErrBadExtension) into status codes.
 package filestore

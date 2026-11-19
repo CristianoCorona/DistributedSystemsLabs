@@ -1,4 +1,4 @@
-// Package app is the protocol layer: it decides what to do with a parsed request and maps
+// Package app is the application layer: it decides what to do with a parsed request and maps
 // the errors of the file store to HTTP status codes. It does not know how connections are
 // accepted (that is the server package) nor how files are laid out on disk (that is the
 // filestore package).

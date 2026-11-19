@@ -23,7 +23,7 @@ import (
 const docRoot = "./data"
 
 // main checks the arguments, opens the document root and wires the layers together:
-// the server (transport) calls the app (protocol), which uses the file store (domain).
+// the server (transport) calls the app (application), which uses the file store (service).
 func main() {
 	// Validation of the port (argument): exactly one argument, an integer from 1 to 65535.
 	// Port 0 is excluded on purpose: net.Listen would pick a random free port, and the
@@ -48,7 +48,7 @@ func main() {
 	cfg := server.Config{
 		MaxConns:       10,               // the lab asks for at most 10 concurrent handlers
 		HeaderTimeout:  5 * time.Second,  // a silent client loses its slot quickly
-		RequestTimeout: 60 * time.Second, // enough for large files over a slow link
+		RequestTimeout: 60 * time.Second, // should be enough for a large file, even on a slow connection
 	}
 	// The parsed number is used, not the raw argument, so "+80" or "080" become ":80".
 	srv := server.New(":"+strconv.Itoa(port), cfg, application.Route)
