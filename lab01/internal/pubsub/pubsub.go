@@ -48,6 +48,7 @@ func (b *Broker) Subscribe(topic string) *Subscriber {
 		b.brokerLock <- struct{}{} // Make sure only one goroutine can create a lock for a topic at a time
 		if _, exists := b.topicLock[topic]; !exists {
 			b.topicLock[topic] = make(chan struct{}, 1)
+			b.topicSubscribers[topic] = make(map[int]*Subscriber)
 		}
 		<-b.brokerLock
 	}
