@@ -1,0 +1,93 @@
+2026/11/16 16:54:39 Hello, World!
+2026/11/16 16:54:39 Server is listening on 8080, serving ./files
+2026/11/16 16:54:47 Received request from [::1]:41242: GET /
+2026/11/16 16:54:47 Received request from [::1]:41258: GET /favicon.ico
+2026/11/16 16:54:53 Received request from [::1]:41274: GET /
+2026/11/16 16:54:53 Received request from [::1]:41286: GET /test.txt
+2026/11/16 16:54:53 Received request from [::1]:41292: GET /test.txt
+2026/11/16 16:54:53 Received request from [::1]:41296: GET /index.html
+2026/11/16 16:54:53 Received request from [::1]:41310: GET /style.css
+2026/11/16 16:54:53 Received request from [::1]:41316: GET /pic.jpg
+2026/11/16 16:54:53 Received request from [::1]:41328: GET /pic.jpeg
+2026/11/16 16:54:53 Received request from [::1]:41334: GET /anim.gif
+2026/11/16 16:54:53 Received request from [::1]:41340: GET /test.txt
+2026/11/16 16:54:53 Received request from [::1]:41346: GET /pic.jpg
+2026/11/16 16:54:53 Received request from [::1]:41348: GET /missing.txt
+2026/11/16 16:54:53 Received request from [::1]:41350: GET /program.exe
+2026/11/16 16:54:53 Received request from [::1]:41352: GET /noextension
+2026/11/16 16:54:53 Received request from [::1]:41354: PUT /test.txt
+2026/11/16 16:54:53 Received request from [::1]:41366: DELETE /test.txt
+2026/11/16 16:54:53 Received request from 127.0.0.1:54206: HEAD /test.txt
+2026/11/16 16:54:53 Received request from [::1]:41378: FOO /test.txt
+2026/11/16 16:54:53 Bad Request from 127.0.0.1:54212, malformed HTTP request "garbage"
+2026/11/16 16:54:53 Bad Request from 127.0.0.1:54218, malformed HTTP request "GET /test.txt"
+2026/11/16 16:54:53 Bad Request from 127.0.0.1:54220, malformed MIME header: missing colon: "badheader"
+2026/11/16 16:54:53 Received request from [::1]:41394: POST /new.txt
+2026/11/16 16:54:53 Received request from [::1]:41410: GET /new.txt
+2026/11/16 16:54:53 Received request from [::1]:41416: POST /up/copy.jpg
+2026/11/16 16:54:53 Received request from [::1]:41418: GET /up/copy.jpg
+2026/11/16 16:54:53 Received request from [::1]:41424: POST /bad.exe
+2026/11/16 16:54:53 Received request from [::1]:41438: GET /../../etc/passwd.txt
+2026/11/16 16:54:58 Bad Request from 127.0.0.1:54224, read tcp 127.0.0.1:8080->127.0.0.1:54224: i/o timeout
+2026/11/16 16:54:59 Received request from [::1]:46268: GET /test.txt
+2026/11/16 16:54:59 Bad Request from 127.0.0.1:33674, EOF
+2026/11/16 16:54:59 Write error to 127.0.0.1:33674, write tcp 127.0.0.1:8080->127.0.0.1:33674: write: broken pipe
+2026/11/16 16:54:59 Bad Request from 127.0.0.1:33730, EOF
+2026/11/16 16:54:59 Bad Request from 127.0.0.1:33716, EOF
+2026/11/16 16:54:59 Write error to 127.0.0.1:33730, write tcp 127.0.0.1:8080->127.0.0.1:33730: write: broken pipe
+2026/11/16 16:54:59 Bad Request from 127.0.0.1:33690, EOF
+2026/11/16 16:54:59 Write error to 127.0.0.1:33716, write tcp 127.0.0.1:8080->127.0.0.1:33716: write: broken pipe
+2026/11/16 16:54:59 Bad Request from 127.0.0.1:33706, EOF
+2026/11/16 16:54:59 Write error to 127.0.0.1:33690, write tcp 127.0.0.1:8080->127.0.0.1:33690: write: broken pipe
+2026/11/16 16:54:59 Bad Request from 127.0.0.1:33746, EOF
+2026/11/16 16:54:59 Bad Request from 127.0.0.1:33754, EOF
+2026/11/16 16:54:59 Write error to 127.0.0.1:33746, write tcp 127.0.0.1:8080->127.0.0.1:33746: write: broken pipe
+2026/11/16 16:54:59 Write error to 127.0.0.1:33754, write tcp 127.0.0.1:8080->127.0.0.1:33754: write: broken pipe
+2026/11/16 16:54:59 Write error to 127.0.0.1:33706, write tcp 127.0.0.1:8080->127.0.0.1:33706: write: broken pipe
+2026/11/16 16:54:59 Bad Request from 127.0.0.1:33676, EOF
+2026/11/16 16:54:59 Write error to 127.0.0.1:33676, write tcp 127.0.0.1:8080->127.0.0.1:33676: write: broken pipe
+2026/11/16 16:54:59 Bad Request from 127.0.0.1:33762, EOF
+2026/11/16 16:54:59 Write error to 127.0.0.1:33762, write tcp 127.0.0.1:8080->127.0.0.1:33762: write: broken pipe
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33778, read tcp 127.0.0.1:8080->127.0.0.1:33778: i/o timeout
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33884, read tcp 127.0.0.1:8080->127.0.0.1:33884: i/o timeout
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33794, read tcp 127.0.0.1:8080->127.0.0.1:33794: i/o timeout
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33824, read tcp 127.0.0.1:8080->127.0.0.1:33824: i/o timeout
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33896, read tcp 127.0.0.1:8080->127.0.0.1:33896: i/o timeout
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33838, read tcp 127.0.0.1:8080->127.0.0.1:33838: i/o timeout
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33810, read tcp 127.0.0.1:8080->127.0.0.1:33810: i/o timeout
+2026/11/16 16:55:04 Received request from [::1]:46270: GET /test.txt
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33868, read tcp 127.0.0.1:8080->127.0.0.1:33868: i/o timeout
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33854, read tcp 127.0.0.1:8080->127.0.0.1:33854: i/o timeout
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33882, read tcp 127.0.0.1:8080->127.0.0.1:33882: i/o timeout
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33906, EOF
+2026/11/16 16:55:04 Write error to 127.0.0.1:33906, write tcp 127.0.0.1:8080->127.0.0.1:33906: write: broken pipe
+2026/11/16 16:55:04 Bad Request from 127.0.0.1:33908, EOF
+2026/11/16 16:55:04 Write error to 127.0.0.1:33908, write tcp 127.0.0.1:8080->127.0.0.1:33908: write: broken pipe
+2026/11/16 16:55:04 Received request from [::1]:46334: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46278: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46314: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46322: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46284: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46298: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46300: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46338: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46336: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46356: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46348: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46320: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46362: POST /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46364: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46378: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46394: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46404: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46416: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46420: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46426: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:46442: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:49226: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:49236: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:49240: GET /race.txt
+2026/11/16 16:55:04 Received request from [::1]:49246: GET /race.txt
+2026/11/16 16:55:05 Received request from [::1]:49252: GET /race.txt
+2026/11/16 16:55:05 Received request from [::1]:49258: GET /race.txt
+2026/11/16 16:55:05 Received request from [::1]:49266: GET /race.txt
