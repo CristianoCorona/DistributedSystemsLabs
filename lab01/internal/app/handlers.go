@@ -79,6 +79,20 @@ func (a *App) getEvents(conn net.Conn, req *http.Request, releaseSlot func(), ac
 	<-cont
 }
 
+func (a *App) subscribe(conn net.Conn, req *http.Request) {
+	// Handle subscription logic here
+	if err := response.Write(conn, http.StatusOK, "text/plain", []byte("Subscribed successfully.")); err != nil {
+		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
+	}
+}
+
+func (a *App) unsubscribe(conn net.Conn, req *http.Request) {
+	// Handle unsubscription logic here
+	if err := response.Write(conn, http.StatusOK, "text/plain", []byte("Unsubscribed successfully.")); err != nil {
+		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
+	}
+}
+
 func (a *App) publish(conn net.Conn, req *http.Request) {
 
 	log.Println("Publishing event")
