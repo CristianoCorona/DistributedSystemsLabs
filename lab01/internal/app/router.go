@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
@@ -39,7 +40,7 @@ var knownMethods = map[string]bool{
 
 // Route is the server's request handler: it picks the action for req
 // based on its method and path.
-func (a *App) Route(conn net.Conn, req *http.Request) {
+func (a *App) Route(conn net.Conn, req *http.Request, releaseSlot func(), acquireSlot func()) {
 	// 0. Log the request received.
 	log.Printf("Received request: %s %s", req.Method, req.URL.Path)
 	// 1. unknown method -> 400
@@ -59,6 +60,10 @@ func (a *App) Route(conn net.Conn, req *http.Request) {
 		}
 	case http.MethodPost:
 		switch {
+			case strings.HasPrefix(req.URL.Path, "/subscribe"):
+				a.subscribe(conn, req)
+			case strings.HasPrefix(req.URL.Path, "/unsubscribe"):
+				a.unsubscribe(conn, req)
 			case strings.HasPrefix(req.URL.Path, "/publish"):
 				a.publish(conn, req)
 			default:
