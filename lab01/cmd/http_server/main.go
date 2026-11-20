@@ -51,7 +51,7 @@ func main() {
 	cfg := server.Config{
 		MaxConns:       10,               // the lab asks for at most 10 concurrent handlers
 		HeaderTimeout:  5 * time.Second,  // a silent client loses its slot quickly
-		RequestTimeout: 60 * time.Second, // should be enough for a large file, even on a slow connection
+		RequestTimeout: 15 * time.Second, // should be enough for a large file, even on a slow connection
 	}
 	// The parsed number is used, not the raw argument, so "+80" or "080" become ":80".
 	srv := server.New(":"+strconv.Itoa(port), cfg, application.Route)

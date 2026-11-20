@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
@@ -90,9 +91,39 @@ func (a *App) getEvent(conn net.Conn, req *http.Request, releaseSlot func(), acq
 	default:
 		log.Println("No events available, releasing slot")
 		releaseSlot()
-		event = <-eventChan
-		acquireSlot()
-		log.Println("Event received after waiting:", string(event))
+
+		timeoutChan := make(chan struct{})
+		errChan := make(chan error, 1)
+		// Start a goroutine that blocks trying to read from the connection until the timeout occurs
+		// When the timeout occurs, the Read call will unblock and the goroutine will send a signal to the timeoutChan
+		go func() {
+			_, err := conn.Read(nil)
+			if err == nil {
+				errChan <- errors.New("unexpected read success")
+				return
+			}
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				errChan <- err
+				return
+			}
+			timeoutChan <- struct{}{}
+		}()
+
+		select {
+		case event = <-eventChan:
+			acquireSlot()
+			log.Println("Event received after waiting:", string(event))
+		case <-timeoutChan:
+			acquireSlot()
+			log.Println("Timeout waiting for event")
+			response.Error(conn, http.StatusNotFound)
+			return
+		case err := <-errChan:
+			acquireSlot()
+			log.Println("Error while waiting for event:", err)
+			response.Error(conn, http.StatusInternalServerError)
+			return
+		}
 	}
 	if err := response.Write(conn, http.StatusOK, "text/plain", event); err != nil {
 		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.

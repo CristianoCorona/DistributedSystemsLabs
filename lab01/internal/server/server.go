@@ -130,7 +130,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	conn.SetDeadline(time.Now().Add(s.cfg.RequestTimeout))
 
 	releaseSlot := func() { 
-		conn.SetDeadline(time.Now())
+		conn.SetDeadline(time.Now().Add(s.cfg.RequestTimeout))
 		<-s.sem
 	}
 	acquireSlot := func() {
