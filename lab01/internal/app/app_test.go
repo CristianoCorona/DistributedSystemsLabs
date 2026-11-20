@@ -18,7 +18,7 @@ func newTestApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(files)
+	return New(files, nil)
 }
 
 // roundTrip parses raw as an HTTP request, passes it to Route and returns the bytes
@@ -48,7 +48,7 @@ func roundTrip(t *testing.T, a *App, raw string) string {
 		got <- string(data)
 	}()
 
-	a.Route(serverEnd, req)
+	a.Route(serverEnd, req, nil, nil)
 	serverEnd.Close() // like Server.handleConn: one request, then the connection is closed
 	return <-got
 }
