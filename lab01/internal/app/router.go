@@ -59,7 +59,7 @@ func (a *App) Route(conn net.Conn, req *http.Request, releaseSlot func(), acquir
 	case http.MethodGet:
 		switch {
 			case strings.HasPrefix(req.URL.Path, "/events"):
-				a.getEvents(conn, req, releaseSlot, acquireSlot)
+				a.getEvent(conn, req, releaseSlot, acquireSlot)
 			default:
 				a.serveFile(conn, req)
 		}

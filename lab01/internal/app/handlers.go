@@ -58,9 +58,7 @@ func (a *App) storeFile(conn net.Conn, req *http.Request) {
 	}
 }
 
-var cont = make(chan struct{}, 1) // TODO: remove, temporary simulation of waiting for event
-
-func (a *App) getEvents(conn net.Conn, req *http.Request, releaseSlot func(), acquireSlot func()) {
+func (a *App) getEvent(conn net.Conn, req *http.Request, releaseSlot func(), acquireSlot func()) {
 
 	if req.URL.Query().Get("id") == "" {
 		log.Println("Missing request ID")
