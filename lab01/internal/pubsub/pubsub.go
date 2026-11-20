@@ -89,11 +89,24 @@ func (b *Broker) Publish(topic string, event []byte) error { // TODO: the part a
 	return nil
 }
 
-func (b *Broker) GetEvent(topic string, subscriberId int) []byte {
+func (b *Broker) GetEvent(topic string, subscriberId int) <-chan []byte {
 	if _, exists := b.topicLock[topic]; !exists {
+		log.Printf("Topic %s does not exist", topic)
 		return nil
 	}
-	return <-b.topicSubscribers[topic][subscriberId].EventChannel // TODO: release worker slot when channel is empty
+	if _, exists := b.topicSubscribers[topic][subscriberId]; !exists {
+		log.Printf("Subscriber %d does not exist for topic %s", subscriberId, topic)
+		return nil
+	}
+	readChan := make(chan []byte, 1) // Create a new channel to return the event to the caller
+	// Start goroutine to read from the event channel and send it to the readChan when an event is available
+	// This prevents the caller from accessing the subscriber's event channel directly.
+	log.Printf("Getting event for topic: %s, subscriberId: %d", topic, subscriberId)
+	go func() {
+		defer close(readChan) // Close the readChan when the goroutine exits to close the channel after the event is read
+		readChan <- <-b.topicSubscribers[topic][subscriberId].EventChannel
+	}()
+	return readChan
 }
 
 func (b *Broker) nextSubscriberId() int { // TODO: improve ID generation (persistence etc.)
