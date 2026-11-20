@@ -15,6 +15,7 @@ import (
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/app"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/pubsub"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/server"
 )
 
@@ -43,8 +44,10 @@ func main() {
 		log.Fatal("Cannot create document root: ", err)
 	}
 
+	broker := pubsub.NewBroker()
+
 	// The app answers each request using the file store rooted at docRoot.
-	application := app.New(files)
+	application := app.New(files, broker)
 	cfg := server.Config{
 		MaxConns:       10,               // the lab asks for at most 10 concurrent handlers
 		HeaderTimeout:  5 * time.Second,  // a silent client loses its slot quickly

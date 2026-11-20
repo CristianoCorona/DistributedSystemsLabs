@@ -11,17 +11,22 @@ import (
 	"strings"
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/pubsub"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
 )
 
 // App is the main application struct. It holds the file store.
 type App struct {
 	files *filestore.Store
+	pubsub *pubsub.Broker
 }
 
 // New returns an App that serves and stores files in files.
-func New(files *filestore.Store) *App {
-	return &App{files: files}
+func New(files *filestore.Store, pubsub *pubsub.Broker) *App {
+	return &App{
+		files: files,
+		pubsub: pubsub,
+	}
 }
 
 // knownMethods lists the HTTP methods defined by RFC 9110 and RFC 5789.
