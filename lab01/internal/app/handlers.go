@@ -2,9 +2,11 @@ package app
 
 import (
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
@@ -60,34 +62,79 @@ var cont = make(chan struct{}, 1) // TODO: remove, temporary simulation of waiti
 
 func (a *App) getEvents(conn net.Conn, req *http.Request, releaseSlot func(), acquireSlot func()) {
 
-	// No events to retrieve, release worker slot
-	releaseSlot()
-	log.Println("Released slot")
-	
-	cont <- struct{}{}
-	cont <- struct{}{}
-
-	// After 12 seconds, acquire a worker slot again to send the response
-	log.Println("Trying to acquire slot")
-	acquireSlot()
-	log.Println("Slot acquired, sending response")
-
-	if err := response.Write(conn, http.StatusOK, "text/plain", []byte("Event received after 12 seconds.")); err != nil {
+	if req.URL.Query().Get("id") == "" {
+		log.Println("Missing request ID")
+		response.Error(conn, http.StatusBadRequest)
+		return
+	}
+	reqId, err := strconv.Atoi(req.URL.Query().Get("id"))
+	if err != nil {
+		log.Println("Invalid request ID:", err)
+		response.Error(conn, http.StatusBadRequest)
+		return
+	}
+	topic := req.URL.Query().Get("topic")
+	if topic == "" {
+		log.Println("Missing topic parameter")
+		response.Error(conn, http.StatusBadRequest)
+		return
+	}
+	eventChan := a.pubsub.GetEvent(topic, reqId)
+	if eventChan == nil {
+		log.Println("No events available for topic:", topic, "and request ID:", reqId)
+		response.Error(conn, http.StatusBadRequest)
+		return
+	}
+	var event []byte
+	select {
+	case event = <-eventChan:
+		log.Println("Event received:", string(event))
+	default:
+		log.Println("No events available, releasing slot")
+		releaseSlot()
+		event = <-eventChan
+		acquireSlot()
+		log.Println("Event received after waiting:", string(event))
+	}
+	if err := response.Write(conn, http.StatusOK, "text/plain", event); err != nil {
 		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
 	}
-
-	<-cont
 }
 
 func (a *App) subscribe(conn net.Conn, req *http.Request) {
 	// Handle subscription logic here
-	if err := response.Write(conn, http.StatusOK, "text/plain", []byte("Subscribed successfully.")); err != nil {
+	topic := req.URL.Query().Get("topic")
+	if topic == "" {
+		log.Println("Missing topic parameter")
+		response.Error(conn, http.StatusBadRequest)
+		return
+	}
+	subscriber := a.pubsub.Subscribe(topic)
+	data := []byte("{ \"id\": \"" + strconv.Itoa(subscriber.Id) + "\" }")
+	if err := response.Write(conn, http.StatusCreated, "text/plain", data); err != nil {
 		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
 	}
 }
 
 func (a *App) unsubscribe(conn net.Conn, req *http.Request) {
 	// Handle unsubscription logic here
+	subscriberId, err := strconv.Atoi(req.URL.Query().Get("id"))
+	if err != nil {
+		log.Println("Invalid subscriber ID:", err)
+		response.Error(conn, http.StatusBadRequest)
+		return
+	}
+	topic := req.URL.Query().Get("topic")
+	if topic == "" {
+		log.Println("Missing topic parameter")
+		response.Error(conn, http.StatusBadRequest)
+		return
+	}
+	if err := a.pubsub.Unsubscribe(topic, subscriberId); err != nil {
+		log.Println("Error unsubscribing:", err)
+		response.Error(conn, http.StatusBadRequest)
+		return
+	}
 	if err := response.Write(conn, http.StatusOK, "text/plain", []byte("Unsubscribed successfully.")); err != nil {
 		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
 	}
@@ -95,11 +142,26 @@ func (a *App) unsubscribe(conn net.Conn, req *http.Request) {
 
 func (a *App) publish(conn net.Conn, req *http.Request) {
 
-	log.Println("Publishing event")
-	<-cont
-	log.Println("Event published, sending response")
-
 	// Handle publish logic here
+
+	topic := req.URL.Query().Get("topic")
+	if topic == "" {
+		log.Println("Missing topic parameter")
+		response.Error(conn, http.StatusBadRequest)
+		return
+	}
+	eventData, err := io.ReadAll(req.Body)
+	if err != nil {
+		log.Println("Error reading request body:", err)
+		response.Error(conn, http.StatusInternalServerError)
+		return
+	}
+	if err := a.pubsub.Publish(topic, eventData); err != nil {
+		log.Println("Error publishing event:", err)
+		response.Error(conn, http.StatusInternalServerError)
+		return
+	}
+
 	if err := response.Write(conn, http.StatusOK, "text/plain", []byte("Published successfully.")); err != nil {
 		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
 	}
