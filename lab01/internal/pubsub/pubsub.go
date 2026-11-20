@@ -1,5 +1,10 @@
 package pubsub
 
+import (
+	"fmt"
+	"log"
+)
+
 type BrokerConfig struct {
 	MaxEventBufferSize int
 }
@@ -58,19 +63,20 @@ func (b *Broker) Subscribe(topic string) *Subscriber {
 	return subscriber
 }
 
-func (b *Broker) Unsubscribe(topic string, subscriberId int) {
+func (b *Broker) Unsubscribe(topic string, subscriberId int) error {
 	if _, exists := b.topicLock[topic]; !exists {
-		return // Topic does not exist, nothing to do
+		return fmt.Errorf("topic does not exist") // Topic does not exist, nothing to do
 	}
 	b.topicLock[topic] <- struct{}{}
 	defer func() { <-b.topicLock[topic] }()
 	close(b.topicSubscribers[topic][subscriberId].EventChannel)
 	delete(b.topicSubscribers[topic], subscriberId)
+	return nil
 }
 
-func (b *Broker) Publish(topic string, event []byte) { // TODO: the part about seq numbers
+func (b *Broker) Publish(topic string, event []byte) error { // TODO: the part about seq numbers
 	if _, exists := b.topicLock[topic]; !exists {
-		return // Topic does not exist, nothing to do
+		return fmt.Errorf("topic does not exist") // Topic does not exist, nothing to do
 	}
 	b.topicLock[topic] <- struct{}{}
 	defer func() { <-b.topicLock[topic] }()
@@ -80,6 +86,7 @@ func (b *Broker) Publish(topic string, event []byte) { // TODO: the part about s
 		default: // Ignore the channel for this event if the channel is full to avoid blocking
 		}
 	}
+	return nil
 }
 
 func (b *Broker) GetEvent(topic string, subscriberId int) []byte {
