@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/broker"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
 )
 
@@ -18,7 +19,7 @@ func newTestApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(files)
+	return New(files, broker.New(64))
 }
 
 // roundTrip parses raw as an HTTP request, passes it to Route and returns the bytes
@@ -48,7 +49,7 @@ func roundTrip(t *testing.T, a *App, raw string) string {
 		got <- string(data)
 	}()
 
-	a.Route(serverEnd, req)
+	a.Route(serverEnd, req, func() {})
 	serverEnd.Close() // like Server.handleConn: one request, then the connection is closed
 	return <-got
 }

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
@@ -19,7 +20,10 @@ import (
 // Handler is called for every well-formed request. It writes the response to conn.
 // It is a plain function type, so the application layer does not need to import this
 // package: any method with the same signature, such as (*app.App).Route, can be passed.
-type Handler func(conn net.Conn, req *http.Request)
+// release gives the connection's slot back before the handler returns, so that a request
+// that only waits (a long poll) does not count towards MaxConns. Calling it is optional,
+// and calling it more than once is harmless: the slot is returned exactly once.
+type Handler func(conn net.Conn, req *http.Request, release func())
 
 // Config holds the limits of a Server.
 type Config struct {
@@ -85,9 +89,15 @@ func (s *Server) Serve() error {
 		}
 
 		go func() {
+
 			// defer needs a function call, not a channel operation, hence the closure.
-			defer func() { <-s.sem }()
-			s.handleConn(conn)
+			// release gives the slot back. sync.Once makes sure that happens exactly once,
+			// whether the handler calls release early (a long poll), the deferred call
+			// below does it when the goroutine ends, or both.
+			var once sync.Once
+			release := func() { once.Do(func() { <-s.sem }) }
+			defer release()
+			s.handleConn(conn, release)
 		}()
 	}
 }
@@ -98,7 +108,7 @@ func (s *Server) Serve() error {
 // The deadline has two phases. Both use SetDeadline, which covers reads and writes:
 // a read deadline alone would let a client that never reads the response hold a slot
 // forever, because the write would block once the socket buffers are full.
-func (s *Server) handleConn(conn net.Conn) {
+func (s *Server) handleConn(conn net.Conn, release func()) {
 	defer conn.Close()
 
 	// Phase 1: the request line and the headers must arrive within HeaderTimeout.
@@ -129,5 +139,5 @@ func (s *Server) handleConn(conn net.Conn) {
 	// handler and writing the response.
 	conn.SetDeadline(time.Now().Add(s.cfg.RequestTimeout))
 
-	s.handler(conn, req)
+	s.handler(conn, req, release) // the handler may call release early, if it only waits (long poll)
 }

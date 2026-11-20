@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/app"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/broker"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/server"
 )
@@ -44,7 +45,9 @@ func main() {
 	}
 
 	// The app answers each request using the file store rooted at docRoot.
-	application := app.New(files)
+	// broker is created with a queue size of 64, which means each subscriber can have up to 64 messages queued before the broker starts dropping messages for that subscriber.
+	b := broker.New(64)
+	application := app.New(files, b)
 	cfg := server.Config{
 		MaxConns:       10,               // the lab asks for at most 10 concurrent handlers
 		HeaderTimeout:  5 * time.Second,  // a silent client loses its slot quickly

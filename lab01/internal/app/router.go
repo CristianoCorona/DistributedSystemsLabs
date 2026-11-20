@@ -9,18 +9,20 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/broker"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
 )
 
 // App is the main application struct. It holds the file store.
 type App struct {
-	files *filestore.Store
+	files  *filestore.Store
+	broker *broker.Broker
 }
 
 // New returns an App that serves and stores files in files.
-func New(files *filestore.Store) *App {
-	return &App{files: files}
+func New(files *filestore.Store, b *broker.Broker) *App {
+	return &App{files: files, broker: b}
 }
 
 // knownMethods lists the HTTP methods defined by RFC 9110 and RFC 5789.
@@ -39,7 +41,7 @@ var knownMethods = map[string]bool{
 
 // Route is the server's request handler: it picks the action for req
 // based on its method and path.
-func (a *App) Route(conn net.Conn, req *http.Request) {
+func (a *App) Route(conn net.Conn, req *http.Request, release func()) {
 	// 0. Log the request received.
 	log.Printf("Received request: %s %s", req.Method, req.URL.Path)
 	// 1. unknown method -> 400
@@ -48,6 +50,29 @@ func (a *App) Route(conn net.Conn, req *http.Request) {
 		return
 	}
 	// TODO: 2. (bonus) broker paths
+	// file extension, so the file store would reject them with 400.
+	switch req.URL.Path {
+	case "/subscribe":
+		if requireMethod(conn, req, http.MethodPost) {
+			a.subscribe(conn, req)
+		}
+		return
+	case "/unsubscribe":
+		if requireMethod(conn, req, http.MethodPost) {
+			a.unsubscribe(conn, req)
+		}
+		return
+	case "/publish":
+		if requireMethod(conn, req, http.MethodPost) {
+			a.publish(conn, req)
+		}
+		return
+	case "/events":
+		if requireMethod(conn, req, http.MethodGet) {
+			a.events(conn, req, release)
+		}
+		return
+	}
 	// 3. switch on req.Method for files
 	switch req.Method {
 	case http.MethodGet:
@@ -59,4 +84,14 @@ func (a *App) Route(conn net.Conn, req *http.Request) {
 		// Error 501 is returned.
 		response.Error(conn, http.StatusNotImplemented)
 	}
+}
+
+// requireMethod reports whether req uses method. If it does not, it answers
+// 501 Not Implemented, as the lab asks for other methods on the broker paths.
+func requireMethod(conn net.Conn, req *http.Request, method string) bool {
+	if req.Method != method {
+		response.Error(conn, http.StatusNotImplemented)
+		return false
+	}
+	return true
 }
