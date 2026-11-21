@@ -9,7 +9,7 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/broker"
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/broker" // new import 
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
 )
@@ -17,10 +17,11 @@ import (
 // App is the main application struct. It holds the file store.
 type App struct {
 	files  *filestore.Store
-	broker *broker.Broker
+	broker *broker.Broker //now uses a broker field 
 }
 
 // New returns an App that serves and stores files in files.
+// added a b parameter to intialize the broker field
 func New(files *filestore.Store, b *broker.Broker) *App {
 	return &App{files: files, broker: b}
 }
@@ -41,6 +42,9 @@ var knownMethods = map[string]bool{
 
 // Route is the server's request handler: it picks the action for req
 // based on its method and path.
+// release func() parameter has been added to allow the handler to release the connection slot before returning, 
+// so that a long poll does not count towards MaxConns. Calling it is optional, 
+// and calling it more than once is harmless because the slot is returned exactly once.
 func (a *App) Route(conn net.Conn, req *http.Request, release func()) {
 	// 0. Log the request received.
 	log.Printf("Received request: %s %s", req.Method, req.URL.Path)
@@ -49,8 +53,9 @@ func (a *App) Route(conn net.Conn, req *http.Request, release func()) {
 		response.Error(conn, http.StatusBadRequest)
 		return
 	}
-	// TODO: 2. (bonus) broker paths
+	// TODO: 2. (bonus) broker paths implemented
 	// file extension, so the file store would reject them with 400.
+	// subscribe, unsubscribe, publish and events 
 	switch req.URL.Path {
 	case "/subscribe":
 		if requireMethod(conn, req, http.MethodPost) {
@@ -74,6 +79,7 @@ func (a *App) Route(conn net.Conn, req *http.Request, release func()) {
 		return
 	}
 	// 3. switch on req.Method for files
+	//
 	switch req.Method {
 	case http.MethodGet:
 		a.serveFile(conn, req)

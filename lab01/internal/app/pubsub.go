@@ -1,4 +1,8 @@
+//pubsub knows nothing about HTTP: it only implements the publish-subscribe logic. 
+// The application layer translates its errors into status codes.
 package app
+
+
 
 import (
 	"encoding/json"
@@ -41,23 +45,27 @@ func writeJSON(conn net.Conn, status int, v any) {
 	}
 }
 
+// writes a plain text response with the given status and text.
 func writeMessage(conn net.Conn, status int, text string) {
 	if err := response.Write(conn, status, "text/plain", []byte(text)); err != nil {
 		log.Println("write response:", err)
 	}
 }
 
+
+// one subscriber and its bounded queue per topic. The broker is safe for concurrent use by multiple goroutines.
 func (a *App) subscribe(conn net.Conn, req *http.Request) {
 	topic, ok := topicParam(req)
 	if !ok {
 		response.Error(conn, http.StatusBadRequest)
 		return
 	}
-	id := a.broker.Subscribe(topic)
+	id := a.broker.Subscribe(topic) // the id is unique across all topics, so it can be used to identify the subscriber in future requests
 	writeJSON(conn, http.StatusCreated, map[string]int{"id": id})
 
 }
 
+// removes a subscriber from a topic. The id must be the one returned by Subscribe for that topic.
 func (a *App) unsubscribe(conn net.Conn, req *http.Request) {
 	topic, ok := topicParam(req)
 	if !ok {
@@ -81,6 +89,7 @@ func (a *App) unsubscribe(conn net.Conn, req *http.Request) {
 	}
 }
 
+// publishes a message to a topic. All subscribers of that topic will receive the message, unless their queue is full.
 func (a *App) publish(conn net.Conn, req *http.Request) {
 	topic, ok := topicParam(req)
 	if !ok {
@@ -98,6 +107,7 @@ func (a *App) publish(conn net.Conn, req *http.Request) {
 	writeMessage(conn, http.StatusOK, "Published.")
 }
 
+// waits for messages for a subscriber of a topic. The id must be the one returned by Subscribe for that topic.
 func (a *App) events(conn net.Conn, req *http.Request, release func()) {
 	topic, ok := topicParam(req)
 	if !ok {
