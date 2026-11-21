@@ -3,7 +3,7 @@
 #
 # Usage:
 #   Terminal 1 (lab01):  go build -o http_server ./cmd/http_server && ./http_server 8080
-#   Terminal 2 (lab01):  bash scripts/broker.sh 8080
+#   Terminal 2 (lab01):  bash scripts/broker_test.sh 8080
 #
 # Takes about 30 seconds: one check waits for the 15-second long-poll timeout.
 # Every run uses its own topic names, so it can be repeated without restarting the server.

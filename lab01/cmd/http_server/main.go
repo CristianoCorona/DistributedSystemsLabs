@@ -1,4 +1,5 @@
-// Command http_server is a concurrent HTTP/1.0 file server built on TCP sockets.
+// Command http_server is a concurrent HTTP/1.0 file server and pub-sub broker built on TCP
+// sockets.
 //
 // Usage:
 //
@@ -44,9 +45,10 @@ func main() {
 		log.Fatal("Cannot create document root: ", err)
 	}
 
-	// The app answers each request using the file store rooted at docRoot.
-	// broker is created with a queue size of 64, which means each subscriber can have up to 64 messages queued before the broker starts dropping messages for that subscriber.
+	// Each subscriber of the broker can have up to 64 undelivered messages: when its
+	// queue is full, new messages of its topic are skipped for it.
 	b := broker.New(64)
+	// The app answers each request using the file store rooted at docRoot and the broker.
 	application := app.New(files, b)
 	cfg := server.Config{
 		MaxConns:       10,               // the lab asks for at most 10 concurrent handlers

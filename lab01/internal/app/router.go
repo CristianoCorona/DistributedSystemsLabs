@@ -1,7 +1,7 @@
 // Package app is the application layer: it decides what to do with a parsed request and maps
-// the errors of the file store to HTTP status codes. It does not know how connections are
-// accepted (that is the server package) nor how files are laid out on disk (that is the
-// filestore package).
+// the errors of the file store and of the broker to HTTP status codes. It does not know how
+// connections are accepted (that is the server package), how files are laid out on disk
+// (that is the filestore package) nor how messages are queued (that is the broker package).
 package app
 
 import (
@@ -9,19 +9,19 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/broker" // new import 
+	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/broker"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore"
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
 )
 
-// App is the main application struct. It holds the file store.
+// App is the main application struct. It holds the file store and the pub-sub broker.
 type App struct {
-	files  *filestore.Store
-	broker *broker.Broker //now uses a broker field 
+	files  *filestore.Store // serves GET and stores POST on file paths
+	broker *broker.Broker   // backs the /subscribe, /unsubscribe, /publish and /events paths
 }
 
-// New returns an App that serves and stores files in files.
-// added a b parameter to intialize the broker field
+// New returns an App that serves and stores files in files and runs the pub-sub
+// operations on b.
 func New(files *filestore.Store, b *broker.Broker) *App {
 	return &App{files: files, broker: b}
 }
@@ -40,11 +40,10 @@ var knownMethods = map[string]bool{
 	http.MethodTrace:   true, // TRACE, known but not implemented (501)
 }
 
-// Route is the server's request handler: it picks the action for req
-// based on its method and path.
-// release func() parameter has been added to allow the handler to release the connection slot before returning, 
-// so that a long poll does not count towards MaxConns. Calling it is optional, 
-// and calling it more than once is harmless because the slot is returned exactly once.
+// Route is the server's request handler: it picks the action for req based on its method
+// and path. release gives the connection's slot back before the handler returns: it is
+// passed to the handler that only waits (GET /events), so that a long poll does not count
+// towards MaxConns. Calling it more than once is harmless: the slot is returned once.
 func (a *App) Route(conn net.Conn, req *http.Request, release func()) {
 	// 0. Log the request received.
 	log.Printf("Received request: %s %s", req.Method, req.URL.Path)
@@ -53,9 +52,9 @@ func (a *App) Route(conn net.Conn, req *http.Request, release func()) {
 		response.Error(conn, http.StatusBadRequest)
 		return
 	}
-	// TODO: 2. (bonus) broker paths implemented
-	// file extension, so the file store would reject them with 400.
-	// subscribe, unsubscribe, publish and events 
+	// 2. broker paths: subscribe, unsubscribe, publish and events. They are matched
+	// exactly and before the files: they have no file extension, so the file store would
+	// reject them with 400. A known method other than the one of the operation gets 501.
 	switch req.URL.Path {
 	case "/subscribe":
 		if requireMethod(conn, req, http.MethodPost) {
@@ -79,7 +78,6 @@ func (a *App) Route(conn net.Conn, req *http.Request, release func()) {
 		return
 	}
 	// 3. switch on req.Method for files
-	//
 	switch req.Method {
 	case http.MethodGet:
 		a.serveFile(conn, req)

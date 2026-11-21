@@ -1,8 +1,4 @@
-//pubsub knows nothing about HTTP: it only implements the publish-subscribe logic. 
-// The application layer translates its errors into status codes.
 package app
-
-
 
 import (
 	"encoding/json"
@@ -18,13 +14,19 @@ import (
 	"github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response"
 )
 
+// pollTimeout is how long a GET /events request waits for a message before it is answered
+// with 204 No Content. The client is then expected to poll again. It must stay below
+// RequestTimeout (set in main), or the deadline would expire before the answer is written.
 const pollTimeout = 15 * time.Second
 
+// topicParam returns the topic query parameter. ok is false if it is missing or empty.
 func topicParam(req *http.Request) (topic string, ok bool) {
 	topic = req.URL.Query().Get("topic")
 	return topic, topic != ""
 }
 
+// idParam returns the id query parameter. ok is false if it is missing, not an integer or
+// below 1, the first id the broker gives out.
 func idParam(req *http.Request) (int, bool) {
 	id, err := strconv.Atoi(req.URL.Query().Get("id"))
 	if err != nil || id < 1 {
@@ -33,6 +35,7 @@ func idParam(req *http.Request) (int, bool) {
 	return id, true
 }
 
+// writeJSON answers with status and v encoded as JSON.
 func writeJSON(conn net.Conn, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -41,31 +44,33 @@ func writeJSON(conn net.Conn, status int, v any) {
 		return
 	}
 	if err := response.Write(conn, status, "application/json", body); err != nil {
-		log.Println("Cannot write response:", err)
+		log.Println("Cannot write response:", err) // The client may have closed the connection during the write; log server side.
 	}
 }
 
-// writes a plain text response with the given status and text.
+// writeMessage answers with status and text as a plain-text body.
 func writeMessage(conn net.Conn, status int, text string) {
 	if err := response.Write(conn, status, "text/plain", []byte(text)); err != nil {
-		log.Println("write response:", err)
+		log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
 	}
 }
 
-
-// one subscriber and its bounded queue per topic. The broker is safe for concurrent use by multiple goroutines.
+// subscribe answers POST /subscribe?topic=X: 201 Created with the new subscriber's id as
+// {"id": N}, or 400 if the topic is missing. The id is unique across all topics, and the
+// subscriber uses it in its later requests.
 func (a *App) subscribe(conn net.Conn, req *http.Request) {
 	topic, ok := topicParam(req)
 	if !ok {
 		response.Error(conn, http.StatusBadRequest)
 		return
 	}
-	id := a.broker.Subscribe(topic) // the id is unique across all topics, so it can be used to identify the subscriber in future requests
+	id := a.broker.Subscribe(topic)
 	writeJSON(conn, http.StatusCreated, map[string]int{"id": id})
-
 }
 
-// removes a subscriber from a topic. The id must be the one returned by Subscribe for that topic.
+// unsubscribe answers POST /unsubscribe?topic=X&id=N: 200 OK once the subscriber is
+// removed, 400 if a parameter is missing or invalid, 404 if the subscriber is unknown or
+// belongs to another topic.
 func (a *App) unsubscribe(conn net.Conn, req *http.Request) {
 	topic, ok := topicParam(req)
 	if !ok {
@@ -80,8 +85,10 @@ func (a *App) unsubscribe(conn net.Conn, req *http.Request) {
 
 	switch err := a.broker.Unsubscribe(topic, id); {
 	case errors.Is(err, broker.ErrNotFound):
+		// Error 404
 		response.Error(conn, http.StatusNotFound)
 	case err != nil:
+		// General error: log the error, then 400 as required by the lab
 		log.Println("Error unsubscribing:", err)
 		response.Error(conn, http.StatusBadRequest)
 	default:
@@ -89,7 +96,9 @@ func (a *App) unsubscribe(conn net.Conn, req *http.Request) {
 	}
 }
 
-// publishes a message to a topic. All subscribers of that topic will receive the message, unless their queue is full.
+// publish answers POST /publish?topic=X by sending the request body to every current
+// subscriber of X, except those whose queue is full: 200 OK, also when the topic has no
+// subscribers, or 400 if the topic is missing or the body cannot be read.
 func (a *App) publish(conn net.Conn, req *http.Request) {
 	topic, ok := topicParam(req)
 	if !ok {
@@ -107,7 +116,13 @@ func (a *App) publish(conn net.Conn, req *http.Request) {
 	writeMessage(conn, http.StatusOK, "Published.")
 }
 
-// waits for messages for a subscriber of a topic. The id must be the one returned by Subscribe for that topic.
+// events answers GET /events?topic=X&id=N with long polling: 200 OK with the queued
+// messages as a JSON array as soon as there is at least one, 204 No Content if none
+// arrives within pollTimeout, 400 if a parameter is missing or invalid, 404 if the
+// subscriber is unknown or unsubscribes while waiting.
+//
+// The connection's slot is released before waiting: a request that only waits is not
+// doing any work, and the lab allows it to be excluded from the connection limit.
 func (a *App) events(conn net.Conn, req *http.Request, release func()) {
 	topic, ok := topicParam(req)
 	if !ok {
@@ -120,16 +135,19 @@ func (a *App) events(conn net.Conn, req *http.Request, release func()) {
 		return
 	}
 
-	release() // the slot is no longer needed: the handler will wait for messages, which does not count towards MaxConns
+	release() // the parameters are valid: from here on the handler only waits
 
 	messages, err := a.broker.Wait(topic, id, pollTimeout)
 	switch {
 	case errors.Is(err, broker.ErrNotFound):
+		// Error 404
 		response.Error(conn, http.StatusNotFound)
 	case err != nil:
+		// General error: log the error, then 400 as required by the lab
 		log.Println("Error waiting for messages:", err)
 		response.Error(conn, http.StatusBadRequest)
 	case len(messages) == 0:
+		// Timeout: no message arrived.
 		writeMessage(conn, http.StatusNoContent, "")
 	default:
 		writeJSON(conn, http.StatusOK, messages)
