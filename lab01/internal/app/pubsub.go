@@ -35,12 +35,13 @@ func idParam(req *http.Request) (int, bool) {
 	return id, true
 }
 
-// writeJSON answers with status and v encoded as JSON.
+// writeJSON answers with status and v encoded as JSON. If v cannot be encoded, the fault
+// is the server's, not the client's, so the answer is 500 Internal Server Error.
 func writeJSON(conn net.Conn, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
 		log.Println("Cannot marshal JSON:", err)
-		response.Error(conn, http.StatusBadRequest)
+		response.Error(conn, http.StatusInternalServerError)
 		return
 	}
 	if err := response.Write(conn, status, "application/json", body); err != nil {
