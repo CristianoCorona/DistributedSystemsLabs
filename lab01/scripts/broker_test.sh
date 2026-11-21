@@ -32,7 +32,7 @@ atleast() { awk -v x="$1" -v y="$2" 'BEGIN { exit !(x >= y) }'; }   # true if $1
 subscribe() { body -X POST "$URL/subscribe?topic=$1" | grep -o '[0-9]\+'; }
 publish()   { curl -s -o /dev/null --data-binary "$2" "$URL/publish?topic=$1"; }
 # seqs prints the sequence numbers of a JSON array of messages, space separated.
-seqs() { grep -o '"Seq":[0-9]*' | cut -d: -f2 | tr '\n' ' ' | sed 's/ $//'; }
+seqs() { grep -o '"seq":[0-9]*' | cut -d: -f2 | tr '\n' ' ' | sed 's/ $//'; }
 
 if ! curl -s -o /dev/null "$URL/"; then
     echo "Cannot reach $URL. Start the server first: ./http_server $PORT"
@@ -71,12 +71,12 @@ echo "3. Publish and receive"
 id=$(subscribe "$RUN-p")
 expect "publish -> 200" 200 "$(status --data-binary hello "$URL/publish?topic=$RUN-p")"
 expect "publish to topic without subscribers -> 200" 200 "$(status --data-binary x "$URL/publish?topic=$RUN-nobody")"
-expect "queued message delivered" '[{"Seq":1,"Body":"hello"}]' "$(body "$URL/events?topic=$RUN-p&id=$id")"
+expect "queued message delivered" '[{"seq":1,"body":"hello"}]' "$(body "$URL/events?topic=$RUN-p&id=$id")"
 publish "$RUN-p" one; publish "$RUN-p" two; publish "$RUN-p" three
 expect "all queued messages in one response, in order" "2 3 4" "$(body "$URL/events?topic=$RUN-p&id=$id" | seqs)"
 publish "$RUN-p" 'say "hi"
 bye'
-if body "$URL/events?topic=$RUN-p&id=$id" | grep -qF '"Body":"say \"hi\"\nbye"'; then ok "quotes and newlines are JSON-escaped"; else bad "special characters not escaped correctly"; fi
+if body "$URL/events?topic=$RUN-p&id=$id" | grep -qF '"body":"say \"hi\"\nbye"'; then ok "quotes and newlines are JSON-escaped"; else bad "special characters not escaped correctly"; fi
 
 echo "4. Long polling (takes ~17 s)"
 id=$(subscribe "$RUN-lp")
@@ -87,7 +87,7 @@ sleep 1
 publish "$RUN-lp" live
 wait $pid
 t1=$(now)
-expect "waiting poll receives the message" '[{"Seq":1,"Body":"live"}]' "$(cat "$TMP/lp")"
+expect "waiting poll receives the message" '[{"seq":1,"body":"live"}]' "$(cat "$TMP/lp")"
 el=$(secs "$t0" "$t1")
 if atleast "$el" 0.9 && ! atleast "$el" 3; then ok "waited, then answered right after the publish (${el}s)"; else bad "poll took ${el}s; expected about 1s (the moment of the publish)"; fi
 t0=$(now)
@@ -101,11 +101,11 @@ echo "5. Subscription rules"
 a=$(subscribe "$RUN-x"); b=$(subscribe "$RUN-y")
 publish "$RUN-x" for-x
 publish "$RUN-y" for-y
-expect "a subscriber only gets its own topic" '[{"Seq":1,"Body":"for-y"}]' "$(body "$URL/events?topic=$RUN-y&id=$b")"
+expect "a subscriber only gets its own topic" '[{"seq":1,"body":"for-y"}]' "$(body "$URL/events?topic=$RUN-y&id=$b")"
 publish "$RUN-old" before
 id=$(subscribe "$RUN-old")
 publish "$RUN-old" after
-expect "only messages published after subscribing" '[{"Seq":2,"Body":"after"}]' "$(body "$URL/events?topic=$RUN-old&id=$id")"
+expect "only messages published after subscribing" '[{"seq":2,"body":"after"}]' "$(body "$URL/events?topic=$RUN-old&id=$id")"
 id=$(subscribe "$RUN-u")
 expect "unsubscribe -> 200" 200 "$(status -X POST "$URL/unsubscribe?topic=$RUN-u&id=$id")"
 expect "publish after unsubscribe still works" 200 "$(status --data-binary x "$URL/publish?topic=$RUN-u")"

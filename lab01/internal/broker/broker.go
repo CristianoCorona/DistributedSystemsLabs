@@ -16,10 +16,11 @@ import (
 // was removed while its Wait was in progress.
 var ErrNotFound = errors.New("unknown subscriber")
 
-// Message is one published message, as delivered to a subscriber.
+// Message is one published message, as delivered to a subscriber. The JSON tags give the
+// field names used in the body of a GET /events response.
 type Message struct {
-	Seq  int    // position of the message in its topic, starting at 1
-	Body string // body of the publish request, unchanged
+	Seq  int    `json:"seq"`  // position of the message in its topic, starting at 1
+	Body string `json:"body"` // body of the publish request
 }
 
 // subscriber is the state of one subscription.
