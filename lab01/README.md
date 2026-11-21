@@ -1,8 +1,9 @@
-# Lab 01: Concurrent HTTP server
+# Lab 01: Concurrent HTTP server and pub-sub broker
 
 ## Overview
 
-`http_server` is an HTTP file server written in Go for TDA596 Distributed Systems. It is built
+`http_server` is an HTTP file server and pub-sub broker written in Go for TDA596 Distributed
+Systems. It is built
 directly on TCP sockets from the `net` package. From `net/http` it uses only
 `http.ReadRequest` to parse requests and the status code constants and `http.StatusText`.
 Responses are written by hand.
@@ -15,16 +16,27 @@ Responses are written by hand.
   same time.
 - Each connection carries one request and is then closed.
 - A client has 5 seconds to send the request line and the headers, then 60 more seconds to
-  send the body and read the response.
+  send the body and read the response. This also covers a long poll, which waits at most
+  15 seconds.
 - At startup the server creates `./data` if it is missing and removes temporary upload files
   left behind by a previous run.
 
-Only the Basic part of the assignment is implemented. The pub-sub broker (Bonus part) is not:
-`App.Route` (`internal/app`) has only a `TODO` for it.
+The same binary, on the same port, is also a pub-sub broker (the Bonus part):
+
+- `POST /subscribe?topic=X` registers a subscriber and answers `201 Created` with `{"id":N}`.
+- `POST /unsubscribe?topic=X&id=N` removes it.
+- `POST /publish?topic=X` sends the request body to every current subscriber of `X`.
+- `GET /events?topic=X&id=N` delivers the subscriber's messages with long polling: it answers
+  as soon as there is a message, or with `204 No Content` after 15 seconds.
+- Each message gets a sequence number in its topic, and every subscriber receives the
+  messages in that order. Each subscriber has a queue of up to 64 undelivered messages, and
+  a publish never blocks.
+- A waiting `GET /events` does not count towards the 10 connections.
 
 ## Requirements coverage
 
-This table covers the Basic part of `docs/assignment.md`.
+This table covers the Basic part of `docs/assignment.md`. The Bonus part is covered in
+[the next table](#bonus-part-pub-sub-broker).
 
 | Requirement | Where | How |
 |---|---|---|
@@ -48,6 +60,22 @@ This table covers the Basic part of `docs/assignment.md`.
 | No web frameworks | `go.mod` | No dependencies outside the standard library. |
 | Containers (recommended) | `Dockerfile` | Multi-stage build; the runtime image is pinned to `alpine:3.24.4`. See [Run with Docker or Podman](#run-with-docker-or-podman). |
 
+### Bonus part: pub-sub broker
+
+| Requirement | Where | How |
+|---|---|---|
+| Same binary and port as the file server, same networking rules | `App.Route` (`internal/app`) | The four broker paths are matched in `Route`, before the file handlers. They go through the same `Server`, connection limit and deadlines. |
+| `POST /subscribe?topic=X` → `201` with `{"id": N}`, a new id for every subscription | `App.subscribe`, `Broker.Subscribe` (`internal/broker`) | Ids come from a single counter, so they are unique across topics. The body is `{"id":N}` with `Content-Type: application/json`. |
+| `POST /unsubscribe?topic=X&id=N` | `App.unsubscribe`, `Broker.Unsubscribe` | Removes the subscriber and its queue, answers `200 OK`. A waiting `GET /events` for it is woken up and answered `404`. |
+| `POST /publish?topic=X` to every current subscriber | `App.publish`, `Broker.Publish` | The body is queued for every subscriber of `X`. Answers `200 OK`, also when the topic has no subscribers. |
+| `GET /events?topic=X&id=N` with long polling, `204` on timeout | `App.events`, `Broker.Wait` | Answers `200 OK` with all queued messages as a JSON array as soon as there is one, or `204 No Content` after 15 seconds. See [Long polling](#long-polling). |
+| Missing topic or invalid id → 400, unknown subscriber → 404, other methods → 501 | `topicParam`, `idParam`, `requireMethod` (`internal/app`) | An id that is not an integer from 1 up is invalid. An id used with the wrong topic counts as unknown. A known method other than the operation's gets `501`, an unknown method `400` as for files. |
+| Shared state protected | `Broker` | A single `sync.Mutex` guards all the state. No operation blocks while holding it. |
+| A sequence number for each message, subscribers receive them in order | `Broker.Publish` | The number is assigned and the message queued in the same critical section, so concurrent publishers are totally ordered. |
+| Only messages published while subscribed | `Broker.Subscribe`, `Broker.Unsubscribe` | A new subscriber starts with an empty queue; an unsubscribed one has no queue left. |
+| Bounded queue per subscriber, publish never blocks | `Broker.Publish` | Each queue is a buffered channel of 64 messages (set in `main`). When it is full, that subscriber misses the message. |
+| Waiting long polls may be excluded from the limit of 10 | `server.Handler`, `App.events` | The handler gets a `release` function that gives the connection's slot back. `events` calls it once the parameters are valid. |
+
 ## Project structure and layering
 
 ```
@@ -57,16 +85,19 @@ lab01/
 │       └── main.go       # argument and port check, configuration, wiring
 ├── internal/
 │   ├── server/           # TCP listener, connection limit, two-phase deadline, request parsing
-│   ├── app/              # method validation and dispatch, GET and POST handlers,
+│   ├── app/              # method validation and dispatch, GET and POST handlers (handlers.go),
+│   │                     # broker handlers and long polling (pubsub.go),
 │   │                     # error -> status code mapping
 │   ├── response/         # writes HTTP/1.0 responses, streaming the body
-│   └── filestore/        # root setup and temp file cleanup, extension check, path cleaning,
-│                         # streaming read, atomic and durable write
-│                         # (app, response and filestore each have a *_test.go file)
+│   ├── filestore/        # root setup and temp file cleanup, extension check, path cleaning,
+│   │                     # streaming read, atomic and durable write
+│   └── broker/           # topics, subscribers, sequence numbers, bounded queues, waiting
+│                         # (app, response, filestore and broker each have a *_test.go file)
 ├── docs/
 │   └── assignment.md     # lab text
 ├── scripts/
-│   └── atomic.sh         # concurrency test for atomic POST
+│   ├── atomic.sh         # concurrency test for atomic POST
+│   └── broker_test.sh    # end-to-end test of the pub-sub broker
 ├── data/                 # document root, created at startup, ignored by git
 ├── Dockerfile
 ├── .dockerignore
@@ -80,28 +111,33 @@ only the names the other layers need are exported. Dependencies go downwards onl
 
 1. **Transport** (package `server`): accepts TCP connections, enforces the connection limit
    and the two-phase deadline set in a `server.Config`, and parses the request with
-   `http.ReadRequest`. It does not know about files. It passes each parsed request to a
-   `server.Handler`, a plain function type `func(net.Conn, *http.Request)`. It uses
-   `response.Error` for the errors it answers itself (`400` and `408`).
+   `http.ReadRequest`. It does not know about files or topics. It passes each parsed request
+   to a `server.Handler`, a plain function type `func(net.Conn, *http.Request, func())`. The
+   third argument, `release`, gives the connection's slot back early (see
+   [Long polling](#long-polling)). It uses `response.Error` for the errors it answers itself
+   (`400` and `408`).
 2. **Application** (package `app`, plus package `response`): `App.Route` decides what to do with
-   a request, and the unexported handlers `serveFile` and `storeFile` map errors from the
-   service layer to status codes. `response.Stream`, `response.Write` and `response.Error`
-   serialize the answer. `app` does not import `server`: `main` passes the method value
-   `App.Route` to the server, and it matches `server.Handler` because the signatures are the
-   same.
-3. **Service** (package `filestore`): `filestore.Open` prepares the root directory.
-   `Store.Get` and `Store.Put` resolve a URL path to a file under the root directory; `Get`
-   opens it for streaming and `Put` replaces it atomically. They return the errors
-   `ErrNotFound` and `ErrBadExtension` and do not know about HTTP.
-   This layer holds the components that do not know about HTTP; the pub-sub broker of the
-   Bonus part would belong here too.
+   a request. The unexported handlers `serveFile` and `storeFile` (`handlers.go`) and
+   `subscribe`, `unsubscribe`, `publish` and `events` (`pubsub.go`) map errors from the
+   service layer to status codes. `response.Stream`, `response.Write`, `response.Empty` and
+   `response.Error` serialize the answer. `app` does not import `server`: `main` passes the
+   method value `App.Route` to the server, and it matches `server.Handler` because the
+   signatures are the same.
+3. **Service** (packages `filestore` and `broker`): these components do not know about HTTP.
+   - `filestore.Open` prepares the root directory. `Store.Get` and `Store.Put` resolve a URL
+     path to a file under the root directory; `Get` opens it for streaming and `Put` replaces
+     it atomically. They return the errors `ErrNotFound` and `ErrBadExtension`.
+   - `broker.New` creates the broker. `Broker.Subscribe`, `Unsubscribe`, `Publish` and `Wait`
+     keep the topics, the subscribers and their queues. They return the error `ErrNotFound`.
 
 ```
 cmd/http_server ──► internal/server ──► internal/response
        │                                       ▲
        ├──────────► internal/app ──────────────┘
        │                  │
-       └──────────► internal/filestore ◄───────┘
+       ├──────────► internal/filestore ◄───────┤
+       │                                       │
+       └──────────► internal/broker ◄──────────┘
 ```
 
 `main` (in `cmd/http_server`) wires the layers together. The document root is the constant
@@ -109,7 +145,8 @@ cmd/http_server ──► internal/server ──► internal/response
 creates the directory with `os.MkdirAll(root, 0o755)` and removes the temporary files of
 interrupted uploads. The `tmp-*` naming of those files is an internal detail of `filestore`,
 so `main` does not need to know about it. Git ignores `data/`, so its contents are never
-committed.
+committed. `main` also creates the broker with `broker.New(64)`, the size of each
+subscriber's queue, and passes both to `app.New`. The broker keeps its state in memory only.
 
 ## Build and run locally
 
@@ -137,7 +174,9 @@ The server prints two lines at startup:
 - The server logs one line for each request (`Received request: GET /index.html`) and one
   for each error to standard error.
 - The connection limit (10) and the timeouts (5 seconds for the headers, 60 seconds for the
-  rest of the request) are fixed in `main`. They cannot be set on the command line.
+  rest of the request) are fixed in `main`. They cannot be set on the command line. The broker's
+  queue size (64) is also fixed in `main`, and the long-poll timeout (15 seconds) in
+  `internal/app/pubsub.go`.
 
 To stop the server, press Ctrl+C. The process exits at once and the operating system frees
 the port. There is no graceful shutdown: requests in progress are cut off. Ctrl+Z only
@@ -308,6 +347,75 @@ connected without finishing its body gets no response: after 60 seconds the serv
 anything (`nc localhost 8080 < /dev/null`), the server logs it and closes the connection
 without a response.
 
+### Pub-sub broker
+
+The broker paths take their parameters from the query string. Quote the URL, or the shell
+treats `&` as a background operator. Start from a freshly started server, so that the first
+id is `1`.
+
+Subscribe, then wait for a message that nobody publishes. The poll ends after 15 seconds
+with an empty `204`:
+
+```bash
+curl -i -X POST 'localhost:8080/subscribe?topic=news'
+curl -i 'localhost:8080/events?topic=news&id=1'
+```
+
+```
+HTTP/1.0 201 Created
+Content-Type: application/json
+Content-Length: 8
+Connection: close
+
+{"id":1}
+```
+
+```
+HTTP/1.0 204 No Content
+Connection: close
+
+```
+
+Wait in one terminal and publish from a second one. The waiting request answers as soon as
+the message is published:
+
+```bash
+curl 'localhost:8080/events?topic=news&id=1'                      # terminal 1, waits
+curl -X POST --data-binary 'hello' 'localhost:8080/publish?topic=news'   # terminal 2: Published.
+```
+
+```
+[{"seq":1,"body":"hello"}]
+```
+
+Messages published while nobody is polling are queued, and the next poll returns all of them
+at once, in order:
+
+```bash
+curl -s -X POST --data-binary 'one' 'localhost:8080/publish?topic=news'
+curl -s -X POST --data-binary 'two' 'localhost:8080/publish?topic=news'
+curl 'localhost:8080/events?topic=news&id=1'      # [{"seq":2,"body":"one"},{"seq":3,"body":"two"}]
+```
+
+Error cases. Only the status line is shown:
+
+```bash
+curl -i -X POST 'localhost:8080/subscribe'                         # HTTP/1.0 400 Bad Request (missing topic)
+curl -i -X POST 'localhost:8080/unsubscribe?topic=news&id=x'       # HTTP/1.0 400 Bad Request (invalid id)
+curl -i -X POST 'localhost:8080/unsubscribe?topic=news&id=99'      # HTTP/1.0 404 Not Found
+curl -i -X POST 'localhost:8080/unsubscribe?topic=sports&id=1'     # HTTP/1.0 404 Not Found (id 1 is on another topic)
+curl -i 'localhost:8080/events?topic=news&id=99'                   # HTTP/1.0 404 Not Found
+curl -i 'localhost:8080/subscribe?topic=news'                      # HTTP/1.0 501 Not Implemented (GET)
+curl -i -X POST 'localhost:8080/events?topic=news&id=1'            # HTTP/1.0 501 Not Implemented
+curl -i -X POST --data-binary 'x' 'localhost:8080/publish?topic=nobody'   # HTTP/1.0 200 OK (no subscribers)
+```
+
+Finally, unsubscribe. A waiting poll of the same subscriber is answered `404` at once:
+
+```bash
+curl -i -X POST 'localhost:8080/unsubscribe?topic=news&id=1'      # HTTP/1.0 200 OK, body "Unsubscribed."
+```
+
 ### Clean up
 
 ```bash
@@ -327,6 +435,7 @@ go test -race ./...
 ```
 ?   	github.com/CristianoCorona/DistributedSystemsLabs/lab01/cmd/http_server	[no test files]
 ok  	github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/app	1.027s
+ok  	github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/broker	1.179s
 ok  	github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/filestore	1.031s
 ok  	github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/response	1.024s
 ?   	github.com/CristianoCorona/DistributedSystemsLabs/lab01/internal/server	[no test files]
@@ -338,20 +447,23 @@ without it. They never touch `./data` and do not need a running server.
 | Package | File | What it covers |
 |---|---|---|
 | `filestore` | `filestore_test.go` | Each test gets its own root from `t.TempDir()`, which `testing` deletes afterwards. `Put` then `Get` returns the same body, size and `Content-Type`; a second `Put` replaces the whole file; the six extensions map to the right `Content-Type`, case-insensitively; other extensions give `ErrBadExtension` and store nothing; a missing file and a directory give `ErrNotFound`; `..` segments, with or without a leading `/`, stay inside the root; stored files have mode `0644`; no `tmp-*` file remains after a successful or a failed `Put`; `Open` creates a missing root and removes only the `tmp-<digits>` files. |
-| `response` | `response_test.go` | `Write`, `Error` and `Stream` write into a `bytes.Buffer`, and the test compares the exact bytes, including `\r\n` and `Content-Length` (also for a binary body). |
+| `response` | `response_test.go` | `Write`, `Error` and `Stream` write into a `bytes.Buffer`, and the test compares the exact bytes, including `\r\n` and `Content-Length` (also for a binary body). `Empty` writes a `204` with only the status line and `Connection: close`. |
 | `app` | `app_test.go` | Requests go to `App.Route` through `net.Pipe()`, an in-memory pair of connected `net.Conn`. An unknown or lowercase method gives `400`, `DELETE` and `PUT` give `501`, a missing file `404`, a bad extension `400` for `GET` and `POST`, a `POST` to a missing directory `400`. A `POST` gives `201 Created`, and a following `GET` returns `200` with the same body and `text/html`. |
+| `broker` | `broker_test.go` | The broker is tested without the network, with a 50 ms timeout instead of 15 s. Unique ids across topics; one `Wait` returns every queued message in order; timeout; wake-up on publish and on unsubscribe; only messages of the own topic, published after subscribing; unknown id or wrong topic; a full queue drops messages without blocking; 10 concurrent publishers give every subscriber the sequence numbers 1 to 500 with no gaps. |
 
 `net.Pipe` is synchronous: a `Write` on one end blocks until the other end reads it. The
 `app` tests therefore read the response in a separate goroutine while `Route` writes it;
 reading only after `Route` returned would deadlock on the first `Write`.
 
 The transport layer (`server`) has no unit tests: its behaviour depends on real sockets and
-timing, and the functional checks below cover it.
+timing, and the functional checks below cover it. The broker paths have no `app` tests
+either: `scripts/broker_test.sh` checks them end to end (see
+[Pub-sub end-to-end test](#pub-sub-end-to-end-test)).
 
 ### Functional checks
 
 The curl and nc commands above cover each status code the server can return: `200`, `201`,
-`400`, `404`, `408` and `501`. To check the connection limit, open 10 connections that send
+`204`, `400`, `404`, `408` and `501`. To check the connection limit, open 10 connections that send
 nothing, then make an eleventh request:
 
 ```bash
@@ -366,6 +478,24 @@ backlog). The server reads it only when a slot frees up, which happens when the 
 connections reach the 5-second header timeout. Expected output: a line like
 `404 after 4.498701s`. If you repeat the test with 9 idle connections, the answer is
 immediate.
+
+### Pub-sub end-to-end test
+
+`scripts/broker_test.sh` runs 46 checks against a running server with curl. It covers the
+subscribe response, every `400`, `404` and `501` case, delivery and order of queued messages,
+JSON escaping, a long poll woken by a publish and one that times out with `204` (without
+`Content-Length`), the subscription rules, unsubscribe waking a waiting poll, the bounded
+queue (100 publishes to a queue of 64), 5 concurrent publishers, and 12 waiting polls that do
+not block a file request. Each run uses its own topic names, so it can be repeated without
+restarting the server. It takes about 20 seconds, because one check waits for the timeout:
+
+```bash
+./http_server 8080                  # terminal 1, from lab01
+bash scripts/broker_test.sh 8080    # terminal 2, from lab01
+```
+
+The last line is `Result: 46 passed, 0 failed`, and the exit status is 0 only if every check
+passes. The script stores one file (`<run>.txt`) in `data/`.
 
 ### Atomicity
 
@@ -438,6 +568,8 @@ prints nothing beyond the normal request log. Rebuild without `-race` afterwards
     the slot forever. `SetDeadline` bounds the write too.
   - A single deadline for the whole connection would force a choice between a short value,
     which cuts off large transfers, and a long one, which lets idle clients hold slots.
+  - A long poll runs under `RequestTimeout` too: it waits at most 15 seconds, then writes its
+    answer well within the 60 seconds.
 - **Port validation.** The argument must be an integer from 1 to 65535. Port 0 is rejected:
   `net.Listen` would pick a random free port, and clients would not know where to connect.
   The parsed number is used to build the address, so `+80` or `080` both listen on `:80`.
@@ -549,6 +681,62 @@ complete.
 
 The [atomicity test](#atomicity) checks this behaviour.
 
+### Pub-sub broker design
+
+**State and locking.** `broker.Broker` holds all the state: the subscribers by id, the set of
+ids of each topic, the last sequence number of each topic and, for each subscriber, its topic
+and its queue. A single `sync.Mutex` guards all of it, as the lab suggests. No operation
+blocks while holding the mutex: `Wait` holds it only to find the queue, and releases it before
+waiting. A finer-grained scheme (one lock per topic) would let publishes on different topics
+run in parallel, but every operation here is a few map operations, so the single mutex is not
+a bottleneck and is much easier to get right.
+
+**Ids.** Ids come from a single counter that starts at 1 and is never reused, so the same
+client gets different ids on different topics, and an old id never points to a new
+subscriber. Each subscriber remembers its topic: a request with a valid id and another topic
+gets `404`, as for an unknown id.
+
+**Sequence numbers and order.** `Publish` assigns the next sequence number of the topic and
+appends the message to every subscriber's queue in the same critical section. Two concurrent
+publishes are therefore totally ordered: every subscriber sees increasing sequence numbers,
+and two subscribers never see two messages in different orders. Numbers are per topic, so a
+gap in what a subscriber receives means that its queue was full and it missed messages.
+
+**Bounded queues.** Each subscriber's queue is a buffered channel of 64 messages (the argument
+of `broker.New` in `main`). `Publish` never waits: if a queue is full, that subscriber misses
+the message, as the lab allows. `Publish` is the only sender and holds the mutex, so the queue
+cannot fill up between the length check and the send. `Unsubscribe` closes the channel, which
+wakes up a waiting `Wait`.
+
+**Message format.** `GET /events` answers with a JSON array of every queued message, oldest
+first, for example `[{"seq":2,"body":"one"},{"seq":3,"body":"two"}]`. Returning all of them
+at once saves a round trip per message when a subscriber has fallen behind. The body is sent
+as a JSON string.
+
+### Long polling
+
+The lab allows long polling, streaming or any other approach. Long polling fits the server
+best: every exchange is still one request and one response on its own connection, with
+`Content-Length` and `Connection: close`, exactly like the file requests. Streaming would
+need a response without a known length that stays open, which HTTP/1.0 can only end by
+closing the connection.
+
+`App.events` validates the parameters, then:
+
+1. **Releases the connection's slot.** A request that waits is not doing any work, and the lab
+   allows it to be excluded from the limit of 10. `server.Handler` receives a `release`
+   function that gives the slot back. `Server.Serve` builds it with `sync.Once`, so calling
+   it early and again when the goroutine ends returns the slot exactly once. Twelve waiting
+   polls do not slow down a file request (checked by
+   [the end-to-end test](#pub-sub-end-to-end-test)).
+2. **Calls `Broker.Wait`**, which returns as soon as one of these happens:
+
+   | Event | Result |
+   |---|---|
+   | The queue has messages (already, or after a publish) | `200 OK` with all of them |
+   | 15 seconds pass with no message | `204 No Content`, with no `Content-Type` or `Content-Length` (RFC 9110 forbids `Content-Length` in a `204`) |
+   | The subscriber is unsubscribed | `404 Not Found` |
+
 ## Known limitations
 
 - **No graceful shutdown.** Ctrl+C or `SIGTERM` ends the process at once, and requests in
@@ -558,10 +746,29 @@ The [atomicity test](#atomicity) checks this behaviour.
   client can fill the disk.
 - **The timeouts are fixed.** A transfer that needs more than 60 seconds after the headers is
   cut off; an upload cut off this way gets no response. Ten clients that connect and send
-  nothing block all other clients for up to 5 seconds.
+  nothing block all other clients for up to 5 seconds. The long-poll timeout (15 seconds) is
+  a constant too, and must stay below `RequestTimeout`, or the deadline would expire before
+  the `204` is written.
 - **The rename is not synced.** File contents are flushed to disk, but the directory is not,
   so a crash right after a `POST` may bring back the previous version. See
   [Atomic POST](#atomic-post).
 - **Missing `Host` header is accepted.** HTTP/1.1 requires a `Host` header, but
   `http.ReadRequest` does not enforce it, and the server answers such requests normally.
-- **Bonus part not implemented.** There is no pub-sub broker.
+- **A client that disconnects while waiting can lose messages.** The server does not notice
+  that the client of a waiting `GET /events` has gone. When a message arrives, `Wait` takes it
+  off the queue, and the write to the closed connection fails or goes nowhere. Delivery is at
+  most once: a message is never delivered twice, but it can be lost this way, or when the
+  subscriber's queue is full (the gap in sequence numbers shows it).
+- **Concurrent polls for the same subscriber share its messages.** Two `GET /events` with the
+  same id read from the same queue, so each gets only part of the messages.
+- **No limit on subscriptions or waiting polls.** A client can subscribe as many times as it
+  likes and keep a poll waiting on each id, each holding a goroutine and a socket. The lab
+  allows waiting polls outside the limit of 10.
+- **Sequence counters are never removed.** The broker keeps the last sequence number of every
+  topic that was ever published to, also after its last subscriber has left, so the memory
+  grows with the number of distinct topic names.
+- **Message bodies are sent as JSON strings.** Bytes that are not valid UTF-8 are replaced
+  with `U+FFFD` by `encoding/json`, so binary payloads do not arrive unchanged.
+- **No authentication and no persistence.** Anyone who knows or guesses an id can poll or
+  unsubscribe it, since ids are consecutive. The broker's state lives in memory and is lost
+  when the server stops.
