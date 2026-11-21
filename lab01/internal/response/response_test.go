@@ -77,3 +77,16 @@ func TestStream(t *testing.T) {
 		t.Errorf("Stream wrote\n%q\nwant\n%q", got, want)
 	}
 }
+
+func TestEmpty(t *testing.T) {
+	var buf bytes.Buffer
+
+	// A 204 response has no body, so it must not carry Content-Type or Content-Length.
+	if err := Empty(&buf, http.StatusNoContent); err != nil {
+		t.Fatalf("Empty: %v", err)
+	}
+	want := "HTTP/1.0 204 No Content\r\nConnection: close\r\n\r\n"
+	if got := buf.String(); got != want {
+		t.Errorf("Empty wrote\n%q\nwant\n%q", got, want)
+	}
+}

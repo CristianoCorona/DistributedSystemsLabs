@@ -41,6 +41,13 @@ func Write(w io.Writer, status int, contentType string, body []byte) error {
 	return Stream(w, status, contentType, int64(len(body)), bytes.NewReader(body))
 }
 
+// Empty writes a complete HTTP/1.0 response with no body and no content headers, as
+// required for 204 No Content: RFC 9110 forbids Content-Length in a 204 response.
+func Empty(w io.Writer, status int) error {
+	_, err := fmt.Fprintf(w, "HTTP/1.0 %d %s\r\nConnection: close\r\n\r\n", status, http.StatusText(status))
+	return err
+}
+
 // Error writes a plain-text response whose body is the status text.
 func Error(w io.Writer, status int) {
 	err := Write(w, status, "text/plain", []byte(http.StatusText(status)))

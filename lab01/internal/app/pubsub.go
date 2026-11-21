@@ -148,8 +148,10 @@ func (a *App) events(conn net.Conn, req *http.Request, release func()) {
 		log.Println("Error waiting for messages:", err)
 		response.Error(conn, http.StatusBadRequest)
 	case len(messages) == 0:
-		// Timeout: no message arrived.
-		writeMessage(conn, http.StatusNoContent, "")
+		// Timeout: no message arrived. A 204 response has no body and no content headers.
+		if err := response.Empty(conn, http.StatusNoContent); err != nil {
+			log.Println("write response:", err) // The client may have closed the connection during the write; log server side.
+		}
 	default:
 		writeJSON(conn, http.StatusOK, messages)
 	}

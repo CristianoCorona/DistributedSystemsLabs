@@ -94,7 +94,7 @@ t0=$(now)
 resp=$(curl -s -i "$URL/events?topic=$RUN-lp&id=$id")
 t1=$(now)
 expect "no message -> 204 No Content" "HTTP/1.0 204 No Content" "$(echo "$resp" | head -1 | tr -d '\r')"
-expect "204 has Content-Length: 0" "0" "$(echo "$resp" | grep -i '^Content-Length' | cut -d' ' -f2 | tr -d '\r')"
+expect "204 has no Content-Length" "" "$(echo "$resp" | grep -i '^Content-Length' | cut -d' ' -f2 | tr -d '\r')"
 if atleast "$(secs "$t0" "$t1")" 10; then ok "204 came after the timeout ($(secs "$t0" "$t1")s)"; else bad "204 came too early ($(secs "$t0" "$t1")s)"; fi
 
 echo "5. Subscription rules"
