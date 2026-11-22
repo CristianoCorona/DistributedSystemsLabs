@@ -60,6 +60,9 @@ func statusLine(resp string) string {
 	return line
 }
 
+// TestRouteStatusCodes checks that Route answers each kind of request with the status code the
+// lab asks for: 400 for invalid methods and bad extensions, 501 for valid methods that are
+// not implemented, 404 for missing files.
 func TestRouteStatusCodes(t *testing.T) {
 	a := newTestApp(t)
 
@@ -68,13 +71,19 @@ func TestRouteStatusCodes(t *testing.T) {
 		raw  string
 		want string
 	}{
+		// Not one of the nine methods of knownMethods: an invalid request, so 400, not 501.
 		{"unknown method", "FOO /hello.txt HTTP/1.1\r\nHost: x\r\n\r\n", "HTTP/1.0 400 Bad Request"},
+		// Methods are case-sensitive: "get" is not GET, so it is unknown too.
 		{"lowercase method", "get /hello.txt HTTP/1.1\r\nHost: x\r\n\r\n", "HTTP/1.0 400 Bad Request"},
+		// Valid methods that this lab does not implement.
 		{"DELETE", "DELETE /hello.txt HTTP/1.1\r\nHost: x\r\n\r\n", "HTTP/1.0 501 Not Implemented"},
 		{"PUT", "PUT /hello.txt HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\nx", "HTTP/1.0 501 Not Implemented"},
 		{"GET missing", "GET /missing.html HTTP/1.1\r\nHost: x\r\n\r\n", "HTTP/1.0 404 Not Found"},
+		// The extension is checked before the file is looked up: 400 even though it is missing.
 		{"GET bad extension", "GET /document.pdf HTTP/1.1\r\nHost: x\r\n\r\n", "HTTP/1.0 400 Bad Request"},
 		{"POST bad extension", "POST /document.pdf HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\nx", "HTTP/1.0 400 Bad Request"},
+		// The server never creates directories; the failure to create the temporary file is
+		// an "other error condition", answered 400.
 		{"POST missing directory", "POST /nodir/a.txt HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\nx", "HTTP/1.0 400 Bad Request"},
 	}
 	for _, c := range cases {
@@ -86,6 +95,9 @@ func TestRouteStatusCodes(t *testing.T) {
 	}
 }
 
+// TestRoutePostThenGet checks the complete responses of a POST followed by a GET of the same
+// file, through Route: the file stored over HTTP comes back over HTTP with the right
+// status, headers and body.
 func TestRoutePostThenGet(t *testing.T) {
 	a := newTestApp(t)
 

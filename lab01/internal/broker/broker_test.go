@@ -12,6 +12,8 @@ import (
 // the tests never need the real 15-second long-poll timeout.
 const short = 50 * time.Millisecond
 
+// TestSubscribeGivesUniqueIDs checks that every subscription gets a different id, also across
+// topics, so that two subscriptions never share a queue.
 func TestSubscribeGivesUniqueIDs(t *testing.T) {
 	b := New(10)
 	// The same client subscribing to two topics must get two different ids.
@@ -23,6 +25,8 @@ func TestSubscribeGivesUniqueIDs(t *testing.T) {
 	}
 }
 
+// TestPublishThenWait checks that one Wait returns every message already queued, oldest first,
+// with sequence numbers starting at 1.
 func TestPublishThenWait(t *testing.T) {
 	b := New(10)
 	id := b.Subscribe("news")
@@ -40,6 +44,8 @@ func TestPublishThenWait(t *testing.T) {
 	}
 }
 
+// TestWaitTimesOut checks that Wait returns no messages and no error once the timeout passes,
+// and not before: this is what becomes the 204 answer of a long poll.
 func TestWaitTimesOut(t *testing.T) {
 	b := New(10)
 	id := b.Subscribe("news")
@@ -54,6 +60,8 @@ func TestWaitTimesOut(t *testing.T) {
 	}
 }
 
+// TestWaitWakesUpOnPublish checks that a Wait that is already blocked returns as soon as a message
+// is published, long before its timeout. This is the core of long polling.
 func TestWaitWakesUpOnPublish(t *testing.T) {
 	b := New(10)
 	id := b.Subscribe("news")
@@ -69,6 +77,8 @@ func TestWaitWakesUpOnPublish(t *testing.T) {
 	}
 }
 
+// TestOnlyMessagesOfOwnTopic checks that a subscriber does not receive messages published to
+// another topic.
 func TestOnlyMessagesOfOwnTopic(t *testing.T) {
 	b := New(10)
 	id := b.Subscribe("news")
@@ -79,6 +89,8 @@ func TestOnlyMessagesOfOwnTopic(t *testing.T) {
 	}
 }
 
+// TestOnlyMessagesAfterSubscribing checks that a subscriber receives only the messages published
+// after it subscribed, as the lab requires.
 func TestOnlyMessagesAfterSubscribing(t *testing.T) {
 	b := New(10)
 	b.Publish("news", "old")
@@ -91,6 +103,8 @@ func TestOnlyMessagesAfterSubscribing(t *testing.T) {
 	}
 }
 
+// TestUnknownSubscriber checks that an unknown id, or a valid id used with the wrong topic, gives
+// ErrNotFound (404) in Wait and Unsubscribe.
 func TestUnknownSubscriber(t *testing.T) {
 	b := New(10)
 	id := b.Subscribe("news")
@@ -107,6 +121,8 @@ func TestUnknownSubscriber(t *testing.T) {
 	}
 }
 
+// TestUnsubscribe checks that after Unsubscribe the subscriber is gone: Publish does not panic
+// on its closed queue, and Wait and a second Unsubscribe give ErrNotFound.
 func TestUnsubscribe(t *testing.T) {
 	b := New(10)
 	id := b.Subscribe("news")
@@ -123,6 +139,8 @@ func TestUnsubscribe(t *testing.T) {
 	}
 }
 
+// TestUnsubscribeWakesWaiter checks that Unsubscribe wakes a Wait in progress with ErrNotFound at
+// once, so that a waiting poll gets 404 instead of hanging until its timeout.
 func TestUnsubscribeWakesWaiter(t *testing.T) {
 	b := New(10)
 	id := b.Subscribe("news")
@@ -141,6 +159,9 @@ func TestUnsubscribeWakesWaiter(t *testing.T) {
 	}
 }
 
+// TestPublishNeverBlocks checks that Publish never blocks on a full queue: the subscriber keeps
+// the first messages and misses the rest. It matters because one slow subscriber must not
+// stop every publisher.
 func TestPublishNeverBlocks(t *testing.T) {
 	b := New(2)
 	id := b.Subscribe("news")
@@ -167,6 +188,9 @@ func TestPublishNeverBlocks(t *testing.T) {
 	}
 }
 
+// TestConcurrentPublishersKeepOrder checks that many concurrent publishers are totally ordered:
+// every subscriber gets all sequence numbers in order, with no gaps or duplicates. With
+// -race it also checks that the broker state is properly locked.
 func TestConcurrentPublishersKeepOrder(t *testing.T) {
 	const publishers, perPublisher = 10, 50
 	b := New(publishers * perPublisher)

@@ -32,6 +32,9 @@ func readAll(t *testing.T, body io.ReadCloser) string {
 	return string(data)
 }
 
+// TestPutThenGet checks that a file stored with Put comes back from Get with the same body, its
+// size and the Content-Type of its extension. It is the basic POST-then-GET round trip of
+// the lab, without the network.
 func TestPutThenGet(t *testing.T) {
 	s, _ := openTemp(t)
 
@@ -54,6 +57,8 @@ func TestPutThenGet(t *testing.T) {
 	}
 }
 
+// TestPutReplacesExistingFile checks that a second Put on the same name replaces the whole file. It
+// matters because an in-place write would leave the tail of the old version behind.
 func TestPutReplacesExistingFile(t *testing.T) {
 	s, _ := openTemp(t)
 
@@ -73,6 +78,8 @@ func TestPutReplacesExistingFile(t *testing.T) {
 	}
 }
 
+// TestContentTypes checks that each of the six allowed extensions gives the Content-Type the
+// lab asks for, also when the extension is upper case.
 func TestContentTypes(t *testing.T) {
 	s, _ := openTemp(t)
 
@@ -84,7 +91,7 @@ func TestContentTypes(t *testing.T) {
 		"/a.jpeg": "image/jpeg",
 		"/a.jpg":  "image/jpeg",
 		"/a.css":  "text/css",
-		"/B.JPG":  "image/jpeg",
+		"/B.JPG":  "image/jpeg", // upper-case extension: same type as .jpg
 	}
 	for name, want := range cases {
 		if err := s.Put(name, strings.NewReader("x")); err != nil {
@@ -101,9 +108,14 @@ func TestContentTypes(t *testing.T) {
 	}
 }
 
+// TestBadExtension checks that names with a forbidden or missing extension are rejected with
+// ErrBadExtension by both Get and Put, before anything is written: this is what makes the
+// handlers answer 400.
 func TestBadExtension(t *testing.T) {
 	s, root := openTemp(t)
 
+	// "/" is the root itself, which has no extension. "/tmp-123" has the form of a temporary
+	// file written by Put: rejecting it is what keeps half-written uploads from being served.
 	for _, name := range []string{"/document.pdf", "/noextension", "/", "/tmp-123"} {
 		if _, _, _, err := s.Get(name); !errors.Is(err, ErrBadExtension) {
 			t.Errorf("Get(%q) error = %v, want ErrBadExtension", name, err)
@@ -118,6 +130,8 @@ func TestBadExtension(t *testing.T) {
 	}
 }
 
+// TestGetMissingFile checks that a file that does not exist gives ErrNotFound, which the handler
+// turns into 404.
 func TestGetMissingFile(t *testing.T) {
 	s, _ := openTemp(t)
 
@@ -126,6 +140,8 @@ func TestGetMissingFile(t *testing.T) {
 	}
 }
 
+// TestGetDirectoryIsNotFound checks that a directory whose name has an allowed extension is reported
+// as missing instead of being sent as if it were a file.
 func TestGetDirectoryIsNotFound(t *testing.T) {
 	s, root := openTemp(t)
 
@@ -138,6 +154,9 @@ func TestGetDirectoryIsNotFound(t *testing.T) {
 	}
 }
 
+// TestPathTraversalStaysInRoot checks that ".." segments can never make Put or Get leave the root
+// directory. It matters because otherwise a client could read or overwrite any file the
+// server process can access.
 func TestPathTraversalStaysInRoot(t *testing.T) {
 	// The root is a subdirectory, so that a path escaping it would land in parent,
 	// where the test can detect it.
@@ -173,6 +192,8 @@ func TestPathTraversalStaysInRoot(t *testing.T) {
 	}
 }
 
+// TestPutFileMode checks that stored files get mode 0644, so that they are readable by everyone
+// like ordinary files, not 0600 as os.CreateTemp would leave them.
 func TestPutFileMode(t *testing.T) {
 	s, root := openTemp(t)
 
@@ -201,6 +222,9 @@ func (r *failingReader) Read(p []byte) (int, error) {
 	return 0, errors.New("connection reset")
 }
 
+// TestPutLeavesNoTempFile checks that neither a successful nor a failed Put leaves a temporary
+// file in the root, and that a failed Put does not create the target. It matters because a
+// client that disconnects mid-upload must not leave garbage or a partial file.
 func TestPutLeavesNoTempFile(t *testing.T) {
 	s, root := openTemp(t)
 
@@ -225,6 +249,8 @@ func TestPutLeavesNoTempFile(t *testing.T) {
 	}
 }
 
+// TestOpenCreatesRoot checks that Open creates a missing root directory, including its parents,
+// so the server starts on a fresh clone without manual setup.
 func TestOpenCreatesRoot(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "a", "b", "data")
 
@@ -240,6 +266,8 @@ func TestOpenCreatesRoot(t *testing.T) {
 	}
 }
 
+// TestOpenRemovesTempFiles checks that Open removes the temporary files of an interrupted run and
+// nothing else: client files that only look similar, and directories, are kept.
 func TestOpenRemovesTempFiles(t *testing.T) {
 	root := t.TempDir()
 

@@ -10,6 +10,8 @@ import (
 // The tests compare exact bytes: a client parses the status line and the headers
 // literally, so a missing "\r" or a wrong Content-Length is a real bug, not a detail.
 
+// TestWrite checks the exact bytes of a complete response with an in-memory body: status
+// line, the three headers, the empty line and the body.
 func TestWrite(t *testing.T) {
 	var buf bytes.Buffer
 
@@ -27,6 +29,8 @@ func TestWrite(t *testing.T) {
 	}
 }
 
+// TestWriteBinaryBody checks that a binary body is sent unchanged and that Content-Length counts
+// its bytes. It matters because images are served with the same code.
 func TestWriteBinaryBody(t *testing.T) {
 	var buf bytes.Buffer
 
@@ -47,6 +51,8 @@ func TestWriteBinaryBody(t *testing.T) {
 	}
 }
 
+// TestError checks that every error status the server sends itself produces a well-formed
+// text/plain response whose body is the status text, as the lab requires.
 func TestError(t *testing.T) {
 	cases := []struct {
 		status int
@@ -54,6 +60,7 @@ func TestError(t *testing.T) {
 	}{
 		{http.StatusBadRequest, "HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nBad Request"},
 		{http.StatusNotFound, "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot Found"},
+		// 408 is sent by the server package when the headers do not arrive in time.
 		{http.StatusRequestTimeout, "HTTP/1.0 408 Request Timeout\r\nContent-Type: text/plain\r\nContent-Length: 15\r\nConnection: close\r\n\r\nRequest Timeout"},
 		{http.StatusNotImplemented, "HTTP/1.0 501 Not Implemented\r\nContent-Type: text/plain\r\nContent-Length: 15\r\nConnection: close\r\n\r\nNot Implemented"},
 	}
@@ -66,6 +73,8 @@ func TestError(t *testing.T) {
 	}
 }
 
+// TestStream checks the exact bytes of a response whose body is copied from a reader with a
+// given size, which is how files are sent to the client.
 func TestStream(t *testing.T) {
 	var buf bytes.Buffer
 
@@ -78,6 +87,9 @@ func TestStream(t *testing.T) {
 	}
 }
 
+// TestEmpty checks that a 204 response has only the status line and Connection: close.
+// It matters because RFC 9110 forbids Content-Length in a 204, which is the long-poll
+// timeout answer.
 func TestEmpty(t *testing.T) {
 	var buf bytes.Buffer
 
