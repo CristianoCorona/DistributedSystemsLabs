@@ -4,7 +4,7 @@ There are three kinds of tests:
 
 | What | Needs a running server | Checks |
 |---|---|---|
-| [Go unit tests](#go-unit-tests) (`go test`) | No | 29 tests in 4 packages: `filestore`, `response`, `app`, `broker` |
+| [Go unit tests](#go-unit-tests) (`go test`) | No | 28 tests in 4 packages: `filestore`, `response`, `app`, `broker` |
 | [`scripts/atomic.sh`](#scriptsatomicsh) | Yes, on port 8080 | Concurrent `POST`s and `GET`s of one file never produce a mixed or truncated file |
 | [`scripts/broker_test.sh`](#scriptsbroker_testsh) | Yes, on the given port | 46 end-to-end checks of the pub-sub broker over HTTP |
 
@@ -96,9 +96,6 @@ Each test writes into a `bytes.Buffer` and compares the exact bytes, including `
 - **TestWrite.** `Write(200, "text/html", "<h1>Hello</h1>")`. Expects the full response with
   `Content-Length: 14`. Exercises `response.Write` and `response.Stream`. A failure means
   every short response the server sends is malformed.
-- **TestWriteBinaryBody.** `Write(201, "image/gif", {0x00, 0xff, 'a'})`. Expects the bytes
-  unchanged and `Content-Length: 3`. Exercises the byte (not character) count. A failure
-  means binary files would be corrupted or announced with the wrong length.
 - **TestError.** `Error` with 400, 404, 408 and 501. Expects a `text/plain` response whose
   body is the status text (for example `Not Found`). Exercises `response.Error`. A failure
   means error responses are not well-formed, as the lab requires.

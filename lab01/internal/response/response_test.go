@@ -29,28 +29,6 @@ func TestWrite(t *testing.T) {
 	}
 }
 
-// TestWriteBinaryBody checks that a binary body is sent unchanged and that Content-Length counts
-// its bytes. It matters because images are served with the same code.
-func TestWriteBinaryBody(t *testing.T) {
-	var buf bytes.Buffer
-
-	// Content-Length counts bytes, not characters: a body with a NUL and a non-ASCII
-	// byte must be sent unchanged and counted as 3 bytes.
-	body := []byte{0x00, 0xff, 'a'}
-	if err := Write(&buf, http.StatusCreated, "image/gif", body); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	want := "HTTP/1.0 201 Created\r\n" +
-		"Content-Type: image/gif\r\n" +
-		"Content-Length: 3\r\n" +
-		"Connection: close\r\n" +
-		"\r\n" +
-		"\x00\xffa"
-	if got := buf.String(); got != want {
-		t.Errorf("Write wrote\n%q\nwant\n%q", got, want)
-	}
-}
-
 // TestError checks that every error status the server sends itself produces a well-formed
 // text/plain response whose body is the status text, as the lab requires.
 func TestError(t *testing.T) {

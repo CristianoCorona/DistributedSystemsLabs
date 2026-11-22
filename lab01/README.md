@@ -149,7 +149,7 @@ go test -race ./...                       # unit tests, no server needed
 bash scripts/broker_test.sh 8080          # about 20 s
 ```
 
-- `go test` runs 29 unit tests of `filestore`, `response`, `app` and `broker`: file storage
+- `go test` runs 28 unit tests of `filestore`, `response`, `app` and `broker`: file storage
   and lookup, exact response bytes, status codes through `App.Route`, and broker ordering,
   queues and wake-ups.
 - `atomic.sh` sends 20 rounds of concurrent `POST`s of two 5 MB versions plus `GET`s of the
