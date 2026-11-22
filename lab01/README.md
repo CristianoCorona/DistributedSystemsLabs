@@ -48,6 +48,20 @@ docker run --rm -p 8080:8080 -v ./data:/app/data:Z http_server
 The volume shares `data/` with the host; `:Z` is needed on SELinux systems such as Fedora.
 Details, startup output and other ports: [docs/running.md](docs/running.md).
 
+On AWS, the same container runs on an EC2 instance of the AWS Academy Learner Lab
+(`us-east-1`, Amazon Linux 2023, `t3.micro`); nothing in the code is specific to AWS. On the
+instance, from the cloned repository:
+
+```bash
+cd ~/DistributedSystemsLabs/lab01
+docker build -t http_server .
+docker run --rm --name http_server -p 8080:8080 -v "$PWD/data":/app/data http_server
+```
+
+The security group opens port 8080 only to the users' IPv4 addresses, and the public IP
+changes at every lab session. Setup, tests from the laptop and troubleshooting:
+[docs/aws.md](docs/aws.md).
+
 ## Requirements coverage
 
 This table covers the Basic part of [the lab text](docs/assignment.md). The Bonus part is
