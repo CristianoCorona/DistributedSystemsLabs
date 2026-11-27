@@ -16,9 +16,11 @@ Unit tests come first because they pinpoint the faulty rule (e.g. "map
 task 3 was assigned twice") while `test-mr.sh` only reports that the
 final output is wrong.
 
+From `lab02/`:
+
 ```bash
-cd src && go test -race -v ./mr/
-cd src/main && bash test-mr.sh
+(cd src && go test -race -v ./mr/)
+(cd src/main && bash test-mr.sh)
 ```
 
 ## Properties covered by the unit tests
@@ -38,6 +40,9 @@ cd src/main && bash test-mr.sh
 | An unreadable input is an error and produces no file | `TestDoMapMissingInput` |
 | A file being written is invisible under its final name | `TestWriteAtomicallyIsInvisibleUntilDone` |
 | A failed write leaves no file and does not damage an older one | `TestWriteAtomicallyFailureLeavesNothing`, `TestWriteAtomicallyFailureKeepsOldFile` |
+| Reduce groups values by key: one `key value` line per key, each key in one file, correct counts | `TestDoReduceGroupsAndCounts` |
+| A reduce task with a missing input fails and writes nothing | `TestDoReduceMissingIntermediate` |
+| A truncated intermediate file is an error, not a shorter file | `TestReadIntermediateCorrupted` |
 
 ## Mutation check
 
@@ -71,12 +76,53 @@ Same check on the map side of `worker.go` (2026-11-27):
 | only the first pair of a bucket encoded | `TestDoMapPartitionsByKey` |
 | temporary file not removed on failure | `TestWriteAtomicallyFailureLeavesNothing` |
 | output written in place, without a temporary file | `TestWriteAtomicallyIsInvisibleUntilDone`, `TestWriteAtomicallyFailureKeepsOldFile` |
-| rename before writing the data | every worker test except `TestDoMapMissingInput` |
+| rename before writing the data | every map-side test except `TestDoMapMissingInput` |
 
 `TestDoMapCreatesEmptyFiles` and the two "atomically" tests that check
 what a reader sees were added because of this check: the first version
 of the tests let the "empty buckets" and "written in place" mutants survive.
 
+Same check on the reduce side of `worker.go` (2026-11-27): every mutant
+was caught.
+
+| Mutant | Caught by |
+|---|---|
+| no grouping (one output line per pair) | `TestDoReduceGroupsAndCounts` |
+| no sorting before grouping | `TestDoReduceGroupsAndCounts` |
+| missing intermediate file skipped | `TestDoReduceMissingIntermediate` |
+| truncated file treated as end of file | `TestReadIntermediateCorrupted` |
+| wrong output format (`%v: %v`) | `TestDoReduceGroupsAndCounts` |
+| last map task's file not read | `TestDoReduceGroupsAndCounts`, `TestDoReduceMissingIntermediate` |
+| first value of each key dropped | `TestDoReduceGroupsAndCounts` |
+
 ## End-to-end tests (`test-mr.sh`)
 
-To be completed when the worker is implemented and the script is run.
+The script is provided by the lab and is not modified. According to the
+assignment, it checks that the wc and indexer applications produce the
+correct output on the `pg-*.txt` files, that map and reduce tasks run in
+parallel, and that the job recovers from workers that crash; the hints
+add that it checks that no extraneous tasks are scheduled when no worker
+crashes. The test names are those printed by the script.
+
+| Test | Result |
+|---|---|
+| wc | PASS |
+| indexer | PASS |
+| map parallelism | PASS |
+| reduce parallelism | PASS |
+| job count | PASS |
+| early exit | PASS |
+| crash | PASS |
+
+Last run: 2026-11-27, one full run with the race detector (the script's
+default).
+
+The crash test depends on random crashes, so a single pass does not
+prove the implementation always passes. The lab grades with
+`test-mr-many.sh`, which repeats the script with a timeout:
+
+```bash
+(cd src/main && bash test-mr-many.sh 10)
+```
+
+Not run yet.

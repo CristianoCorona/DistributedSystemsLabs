@@ -8,10 +8,10 @@ package mr
 //
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -26,24 +26,13 @@ func wordMap(filename string, contents string) []KeyValue {
 	return kva
 }
 
-// readIntermediate decodes one mr-X-Y file back into key/value pairs,
-// the same way a reduce task will do it.
-func readIntermediate(t *testing.T, path string) []KeyValue {
+// mustReadIntermediate decodes one mr-X-Y file with the production
+// reader and fails the test if the file is missing or corrupted.
+func mustReadIntermediate(t *testing.T, path string) []KeyValue {
 	t.Helper()
-	f, err := os.Open(path)
+	kva, err := readIntermediate(path)
 	if err != nil {
-		t.Fatalf("cannot open %s: %v", path, err)
-	}
-	defer f.Close()
-
-	var kva []KeyValue
-	dec := json.NewDecoder(f)
-	for {
-		var kv KeyValue
-		if err := dec.Decode(&kv); err != nil {
-			break // io.EOF at the end of the file
-		}
-		kva = append(kva, kv)
+		t.Fatalf("readIntermediate(%s): %v", path, err)
 	}
 	return kva
 }
@@ -84,7 +73,7 @@ func TestDoMapPartitionsByKey(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("file for reduce task %d missing: %v", y, err)
 		}
-		for _, kv := range readIntermediate(t, path) {
+		for _, kv := range mustReadIntermediate(t, path) {
 			if got := ihash(kv.Key) % nReduce; got != y {
 				t.Errorf("key %q found in bucket %d, belongs to bucket %d", kv.Key, y, got)
 			}
@@ -224,5 +213,105 @@ func TestWriteAtomicallyFailureKeepsOldFile(t *testing.T) {
 
 	if got := readOrEmpty(t, final); got != "good output" {
 		t.Fatalf("old output changed to %q", got)
+	}
+}
+
+// countReduce is a tiny Reduce function for tests: it returns how many
+// values a key has, like the word-count application does.
+func countReduce(key string, values []string) string {
+	return strconv.Itoa(len(values))
+}
+
+// TestDoReduceGroupsAndCounts runs two map tasks and then every reduce
+// task, and checks the final output: one "key value" line per distinct
+// key, each key in exactly one mr-out file, with the right count.
+func TestDoReduceGroupsAndCounts(t *testing.T) {
+	dir := t.TempDir()
+	inputs := []string{"a b a c", "b a d"} // a:3 b:2 c:1 d:1
+	want := map[string]string{"a": "3", "b": "2", "c": "1", "d": "1"}
+	const nReduce = 3
+
+	// Map phase: map task x reads input x.
+	for x, text := range inputs {
+		path := filepath.Join(dir, "input"+strconv.Itoa(x)+".txt")
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		reply := RequestTaskReply{Type: MapTask, TaskID: x, File: path, NReduce: nReduce}
+		if err := doMap(wordMap, reply, dir); err != nil {
+			t.Fatalf("doMap %d: %v", x, err)
+		}
+	}
+
+	// Reduce phase, then read back every output line.
+	got := map[string]string{}
+	for y := 0; y < nReduce; y++ {
+		reply := RequestTaskReply{Type: ReduceTask, TaskID: y, NMap: len(inputs)}
+		if err := doReduce(countReduce, reply, dir); err != nil {
+			t.Fatalf("doReduce %d: %v", y, err)
+		}
+		out := readOrEmpty(t, filepath.Join(dir, "mr-out-"+strconv.Itoa(y)))
+		for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+			if line == "" {
+				continue // an empty output file
+			}
+			fields := strings.Split(line, " ") // the required "%v %v" format
+			if len(fields) != 2 {
+				t.Fatalf("mr-out-%d: malformed line %q", y, line)
+			}
+			if _, dup := got[fields[0]]; dup {
+				t.Fatalf("key %q appears more than once", fields[0])
+			}
+			got[fields[0]] = fields[1]
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("got %d keys %v, want %v", len(got), got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("key %q: got count %q, want %q", k, got[k], v)
+		}
+	}
+	for _, name := range listDir(t, dir) {
+		if strings.HasPrefix(name, "tmp-") {
+			t.Errorf("temporary file left behind: %s", name)
+		}
+	}
+}
+
+// TestDoReduceMissingIntermediate checks that a reduce task whose input
+// is incomplete fails instead of producing a partial result.
+func TestDoReduceMissingIntermediate(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.txt")
+	if err := os.WriteFile(input, []byte("a b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Only map task 0 runs, but the reduce task expects two map tasks.
+	if err := doMap(wordMap, RequestTaskReply{Type: MapTask, TaskID: 0, File: input, NReduce: 1}, dir); err != nil {
+		t.Fatal(err)
+	}
+	err := doReduce(countReduce, RequestTaskReply{Type: ReduceTask, TaskID: 0, NMap: 2}, dir)
+	if err == nil {
+		t.Fatal("doReduce with a missing mr-1-0: want an error, got nil")
+	}
+	if got := readOrEmpty(t, filepath.Join(dir, "mr-out-0")); got != "" {
+		t.Fatalf("mr-out-0 written despite the error: %q", got)
+	}
+}
+
+// TestReadIntermediateCorrupted checks that a damaged file is an error,
+// not silently treated as a shorter file.
+func TestReadIntermediateCorrupted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mr-0-0")
+	data := `{"Key":"a","Value":"1"}` + "\n" + `{"Key":"b","Va` // truncated object
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readIntermediate(path); err == nil {
+		t.Fatal("readIntermediate on a truncated file: want an error, got nil")
 	}
 }

@@ -4,11 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net/rpc"
 	"os"
 	"path/filepath"
+	"sort"
+	"time"
 )
+
+// waitInterval is how long a worker sleeps after a WaitTask reply before
+// asking again. Short enough to pick up newly available tasks with low latency,
+// long enough not to flood the coordinator with RPCs.
+const waitInterval = 500 * time.Millisecond
 
 //
 // Map functions return a slice of KeyValue.
@@ -32,14 +40,67 @@ func ihash(key string) int {
 //
 // main/mrworker.go calls this function.
 //
+// It loops forever: ask the coordinator for a task, run it, 
+// report it, and ask again, until the
+// coordinator says the job is finished or can no longer be reached.
+//
+// A task that fails is logged and not reported: the coordinator will
+// re-assign it to some worker after the timeout.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+ 
+	for {
+		reply, ok := requestTask()
+		if !ok {
+			// The coordinator is gone. In the basic part this means the job
+			// is done and mrcoordinator.go has exited (see the lab text).
+			return
+		}
+ 
+		switch reply.Type {
+		case MapTask:
+			if err := doMap(mapf, reply, "."); err != nil {
+				log.Printf("worker: %v", err)
+				continue // do not report: the task will time out and be re-assigned
+			}
+			reportTask(reply)
+ 
+		case ReduceTask:
+			if err := doReduce(reducef, reply, "."); err != nil {
+				log.Printf("worker: %v", err)
+				continue
+			}
+			reportTask(reply)
+ 
+		case WaitTask:
+			time.Sleep(waitInterval) // nothing to do yet: ask again later
+ 
+		case ExitTask:
+			return
+ 
+		default:
+			// Unknown type: a coordinator/worker mismatch. Behave like WaitTask.
+			log.Printf("worker: unexpected task type %v", reply.Type)
+			time.Sleep(waitInterval)
+		}
+	}
+}
 
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-
+// requestTask asks the coordinator for a task.
+// ok is false if the coordinator could not be reached.
+func requestTask() (reply RequestTaskReply, ok bool) {
+	args := RequestTaskArgs{}
+	reply = RequestTaskReply{} // must be zero-valued before the call
+	ok = call("Coordinator.RequestTask", &args, &reply)
+	return reply, ok
+}
+ 
+// reportTask tells the coordinator that the task described by reply is
+// complete. If the call fails, nothing special is done: the next
+// requestTask will fail too, and the worker will stop there.
+func reportTask(reply RequestTaskReply) {
+	args := ReportTaskArgs{Type: reply.Type, TaskID: reply.TaskID, Attempt: reply.Attempt}
+	call("Coordinator.ReportTask", &args, &ReportTaskReply{})
 }
 
 // doMap runs map task reply.TaskID on the input file reply.File and writes
@@ -86,6 +147,82 @@ func doMap(mapf func(string, string) []KeyValue, reply RequestTaskReply, dir str
 	}
 	return nil
 }
+
+// doReduce runs reduce task Y = reply.TaskID: it reads mr-X-Y for every
+// map task X in directory dir, groups the values by key, calls the
+// application's Reduce function once per key, and writes the results to
+// dir/mr-out-Y, one "key value" line per key, atomically.
+// Like doMap, it does not report to the coordinator.
+func doReduce(reducef func(string, []string) string, reply RequestTaskReply, dir string) error {
+	y := reply.TaskID
+ 
+	// Collect every pair destined for this reduce task, from all map tasks.
+	var kva []KeyValue
+	for x := 0; x < reply.NMap; x++ {
+		pairs, err := readIntermediate(filepath.Join(dir, intermediateName(x, y)))
+		if err != nil {
+			// Map tasks always create all their files, so a missing one is an error.
+			return fmt.Errorf("reduce task %d: %w", y, err)
+		}
+		kva = append(kva, pairs...)
+	}
+ 
+	// Sort by key so that equal keys become adjacent, as in mrsequential.go.
+	sort.Slice(kva, func(i, j int) bool { return kva[i].Key < kva[j].Key })
+ 
+	// Write one output line per distinct key.
+	name := fmt.Sprintf("mr-out-%d", y)
+	err := writeAtomically(dir, name, func(f *os.File) error {
+		i := 0
+		for i < len(kva) {
+			// [i, j) is the run of pairs that share the key kva[i].Key.
+			j := i + 1
+			for j < len(kva) && kva[j].Key == kva[i].Key {
+				j++
+			}
+			values := make([]string, 0, j-i)
+			for k := i; k < j; k++ {
+				values = append(values, kva[k].Value)
+			}
+			output := reducef(kva[i].Key, values)
+ 
+			// This is the line format required by the lab (see mrsequential.go).
+			if _, err := fmt.Fprintf(f, "%v %v\n", kva[i].Key, output); err != nil {
+				return err
+			}
+			i = j // move to the next key
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("reduce task %d: %w", y, err)
+	}
+	return nil
+}
+
+// readIntermediate decodes an mr-X-Y file written by doMap back into
+// key/value pairs. A missing file is an error; reaching the end of the
+// stream of JSON objects is the normal way to stop.
+func readIntermediate(path string) ([]KeyValue, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+ 
+	var kva []KeyValue
+	dec := json.NewDecoder(f)
+	for {
+		var kv KeyValue
+		if err := dec.Decode(&kv); err != nil {
+			if err == io.EOF {
+				return kva, nil // clean end of file
+			}
+			return nil, fmt.Errorf("%s: %w", path, err) // corrupted file
+		}
+		kva = append(kva, kv)
+	}
+}
  
 // intermediateName returns the name of the file holding the output of
 // map task x destined for reduce task y.
@@ -130,54 +267,25 @@ func writeAtomically(dir, name string, write func(f *os.File) error) (err error)
 	return os.Rename(f.Name(), filepath.Join(dir, name))
 }
 
+// call sends an RPC request to the coordinator and waits for the response.
+// It returns true on success, false if the call failed.
 //
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
-}
-
-//
-// send an RPC request to the coordinator, wait for the response.
-// usually returns true.
-// returns false if something goes wrong.
-//
+// Changed from the lab skeleton: if the coordinator cannot be reached,
+// return false instead of calling log.Fatal, so that the caller decides
+// what to do (in the basic part: exit cleanly).
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		return false // coordinator not reachable
 	}
 	defer c.Close()
-
+ 
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
 		return true
 	}
-
-	fmt.Println(err)
+ 
+	log.Println(err)
 	return false
 }
