@@ -8,3 +8,4 @@ api.key
 mr-out-*
 mr-[0-9]*-[0-9]*
 mr-tmp/
+tmp-*
