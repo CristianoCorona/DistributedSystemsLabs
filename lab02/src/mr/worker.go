@@ -6,7 +6,6 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
-	"math"
 	"net/rpc"
 	"os"
 	"sort"
@@ -35,131 +34,87 @@ func ihash(key string) int {
 }
 
 // main/mrworker.go calls this function.
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
-
-	if os.Getenv("DEBUG") != "1" {
-		log.SetOutput(io.Discard)
+func Worker(
+	mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string,
+) {
+	workerID, err := RegisterWorker()
+	if err != nil {
+		log.Printf("Error: registering worker: %v", err)
+		return
 	}
-
-	workerID := RegisterWorker()
 
 	for {
-		task := GetTask(workerID)
+		task, err := GetTask(workerID)
+		if err != nil {
+			log.Printf("Error: getting task: %v", err)
+			return
+		}
+
+		if task.Type == TaskNone {
+			return
+		}
 		if task.WorkerID != workerID {
-			log.Printf("Worker %d received task assigned to worker %d. Ignoring.\n", workerID, task.WorkerID)
+			log.Printf("Error: received task for worker %d, expected worker %d", task.WorkerID, workerID)
 			continue
 		}
-		if task.Type == TaskNone {
-			log.Printf("No more tasks available. Worker exiting.\n")
-			break
-		}
+
 		switch task.Type {
 		case TaskMap:
-			log.Printf("Worker %d received Map task nr: %d\n", workerID, task.TaskID)
-
-			mapTask(workerID, task.TaskID, task.InputFile, task.NReduce, mapf)
-
+			err = mapTask(workerID, task.TaskID, task.InputFile, task.NReduce, mapf)
 		case TaskReduce:
-			log.Printf("Worker %d received Reduce task nr %d\n", workerID, task.TaskID)
-
-			reduceTask(workerID, task.TaskID, task.NMap, reducef)
-			TaskDone(workerID, task.TaskID, task.Type)
+			err = reduceTask(workerID, task.TaskID, task.NMap, reducef)
 		default:
-			log.Printf("Worker received unknown task type: %s\n", task.Type)
+			err = fmt.Errorf("unknown task type %q", task.Type)
+		}
+		if err != nil {
+			log.Printf("Error processing %s task %d: %v", task.Type, task.TaskID, err)
+			return
 		}
 	}
-
 }
 
-func RegisterWorker() (workerID int) {
-	args := RegisterWorkerArgs{}
+func RegisterWorker() (int, error) {
 	reply := RegisterWorkerReply{}
-
-	ok := call("Coordinator.RegisterWorker", &args, &reply)
-	if !ok {
-		log.Fatalf("Call to RegisterWorker failed\n")
-	} else {
-		//log.Printf("RegisterWorker reply: %v\n", reply)
+	if success := call("Coordinator.RegisterWorker", &RegisterWorkerArgs{}, &reply); !success {
+		return 0, fmt.Errorf("RPC call to RegisterWorker failed")
 	}
-
-	return reply.WorkerID
+	return reply.WorkerID, nil
 }
 
-func GetTask(workerID int) Task {
-	args := GetTaskArgs{
-		WorkerID: workerID,
-	}
+func GetTask(workerID int) (Task, error) {
+	args := GetTaskArgs{WorkerID: workerID}
 	reply := GetTaskReply{}
-
-	ok := call("Coordinator.GetTask", &args, &reply)
-	if !ok {
-		log.Printf("Call to GetTask failed\n")
-	} else {
-		//log.Printf("GetTask reply: %v\n", reply.Task)
+	if success := call("Coordinator.GetTask", &args, &reply); !success {
+		return Task{}, fmt.Errorf("RPC call to GetTask failed")
 	}
-
-	return reply.Task
+	return reply.Task, nil
 }
 
-func TaskDone(workerID int, taskID int, taskType TaskType) (approved bool) {
+func TaskDone(workerID, taskID int, taskType TaskType) (bool, error) {
 	args := TaskCompletionArgs{
 		WorkerID: workerID,
 		TaskID:   taskID,
 		TaskType: taskType,
 	}
 	reply := TaskCompletionReply{}
-
-	ok := call("Coordinator.ReportTaskCompletion", &args, &reply)
-	if !ok {
-		log.Printf("Call to ReportTaskCompletion failed\n")
-	} else {
-		//log.Printf("ReportTaskCompletion reply: %v\n", reply)
+	if success := call("Coordinator.ReportTaskCompletion", &args, &reply); !success {
+		return false, fmt.Errorf("RPC call to ReportTaskCompletion failed")
 	}
-	return reply.Approved
+	return reply.Approved, nil
 }
 
-func TaskAck(workerID int, taskID int, taskType TaskType) {
+func TaskAck(workerID, taskID int, taskType TaskType) error {
 	args := AckTaskCompletionArgs{
 		WorkerID: workerID,
 		TaskID:   taskID,
 		TaskType: taskType,
 	}
 	reply := AckTaskCompletionReply{}
-
-	ok := call("Coordinator.AckTaskCompletion", &args, &reply)
-	if !ok {
-		log.Printf("Call to AckTaskCompletion failed\n")
-	} else {
-		//log.Printf("AckTaskCompletion reply: %v\n", reply)
+	if success := call("Coordinator.AckTaskCompletion", &args, &reply); !success {
+		return fmt.Errorf("RPC call to AckTaskCompletion failed")
 	}
-}
-
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
+	return nil
 }
 
 // send an RPC request to the coordinator, wait for the response.
@@ -183,121 +138,148 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	return false
 }
 
-func mapTask(workerID int, taskId int, inputFile string, nReduce int, mapf func(string, string) []KeyValue) {
-	// Read the input file
+func mapTask(
+	workerID, taskID int,
+	inputFile string,
+	nReduce int,
+	mapf func(string, string) []KeyValue,
+) error {
+	if nReduce <= 0 {
+		return fmt.Errorf("invalid reduce task count %d", nReduce)
+	}
+
 	content, err := os.ReadFile(inputFile)
 	if err != nil {
-		log.Fatalf("cannot read %v", inputFile)
+		return fmt.Errorf("read input %q: %w", inputFile, err)
 	}
-	// Call the Map function
 	kva := mapf(inputFile, string(content))
-	log.Printf("Map task %d function produced %d key-value pairs\n", taskId, len(kva))
 
-	encoders := make([]*json.Encoder, nReduce)
+	tempNames := make(map[string]string, nReduce)
 	files := make([]*os.File, nReduce)
-	tmpToFileName := make(map[string]string)
-
-	for i := 0; i < nReduce; i++ {
-		intermediateFileName := fmt.Sprintf("mr-%d-%d", taskId, i)
-		tmpFile, err := os.CreateTemp("", intermediateFileName)
+	encoders := make([]*json.Encoder, nReduce)
+	for reduceID := range files {
+		finalName := fmt.Sprintf("mr-%d-%d", taskID, reduceID)
+		file, err := os.CreateTemp(".", finalName+"-*")
 		if err != nil {
-			log.Fatalf("cannot create temporary file: %v", err)
+			return fmt.Errorf("create map output temporary file: %w", err)
 		}
-		tmpToFileName[tmpFile.Name()] = intermediateFileName
-		files[i] = tmpFile
-		encoders[i] = json.NewEncoder(tmpFile)
+		files[reduceID] = file
+		tempNames[file.Name()] = finalName
+		encoders[reduceID] = json.NewEncoder(file)
 	}
 
-	defer func() {
-		for _, file := range files {
-			file.Close()
-		}
-	}()
-
-	log.Printf("Task %d distributing %d key-value pairs to %d reduce tasks\n", taskId, len(kva), nReduce)
-	size := len(kva)
-	for i, kv := range kva {
-		if i%(int(math.Max(1, float64(len(kva))/10))) == 0 {
-			log.Printf("Progress task %d: %d/%d key-value pairs processed\n", taskId, i, size)
-		}
-		reduceBucket := ihash(kv.Key) % nReduce
-		enc := encoders[reduceBucket]
-		if err := enc.Encode(&kv); err != nil {
-			log.Fatalf("cannot encode key-value pair: %v", err)
+	for _, kv := range kva {
+		reduceID := ihash(kv.Key) % nReduce
+		if err := encoders[reduceID].Encode(&kv); err != nil {
+			return fmt.Errorf("encode map output: %w", err)
 		}
 	}
 
-	approved := TaskDone(workerID, taskId, TaskMap)
-
-	for _, file := range files {
-		if !approved {
-			log.Printf("Task %d completion not approved. Deleting temporary file: %s\n", taskId, file.Name())
-			os.Remove(file.Name())
-			continue
+	for i, file := range files {
+		if err := file.Close(); err != nil {
+			files[i] = nil
+			return fmt.Errorf("close map output temporary file: %w", err)
 		}
-		tmpFileName := file.Name()
-		finalFileName := tmpToFileName[tmpFileName]
-		if err := os.Rename(tmpFileName, finalFileName); err != nil {
-			log.Fatalf("cannot rename temporary file: %v", err)
+		files[i] = nil
+	}
+
+	approved, err := TaskDone(workerID, taskID, TaskMap)
+	if err != nil {
+		return err
+	}
+	if !approved {
+		return fmt.Errorf("coordinator rejected map task completion")
+	}
+
+	for tempName, finalName := range tempNames {
+		if err := os.Rename(tempName, finalName); err != nil {
+			return fmt.Errorf("publish map output %q: %w", finalName, err)
 		}
 	}
 
-	TaskAck(workerID, taskId, TaskMap)
-
-	log.Printf("Map task %d completed.\n", taskId)
+	if err := TaskAck(workerID, taskID, TaskMap); err != nil {
+		return err
+	}
+	return nil
 }
 
-func reduceTask(workerID int, taskId int, nMap int, reducef func(string, []string) string) {
-	kva := []KeyValue{}
-	for i := 0; i < nMap; i++ {
-		inputFile := fmt.Sprintf("mr-%d-%d", i, taskId)
-		file, err := os.Open(inputFile)
+func reduceTask(
+	workerID, taskID, nMap int,
+	reducef func(string, []string) string,
+) error {
+	var kva []KeyValue
+
+	for mapID := 0; mapID < nMap; mapID++ {
+		inputName := fmt.Sprintf("mr-%d-%d", mapID, taskID)
+		file, err := os.Open(inputName)
 		if err != nil {
-			log.Fatalf("cannot open intermediate file: %v", err)
+			return fmt.Errorf("open intermediate file %q: %w", inputName, err)
 		}
-		dec := json.NewDecoder(file)
+
+		decoder := json.NewDecoder(file)
 		for {
 			var kv KeyValue
-			if err := dec.Decode(&kv); err != nil {
+			err := decoder.Decode(&kv)
+			if err == io.EOF {
 				break
+			}
+			if err != nil {
+				file.Close()
+				return fmt.Errorf("decode intermediate file %q: %w", inputName, err)
 			}
 			kva = append(kva, kv)
 		}
-		file.Close()
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("close intermediate file %q: %w", inputName, err)
+		}
 	}
 
 	sort.Sort(ByKey(kva))
 
-	oname := fmt.Sprintf("mr-out-%d", taskId)
-	tmpFile, err := os.CreateTemp("", oname)
+	outputName := fmt.Sprintf("mr-out-%d", taskID)
+	tempFile, err := os.CreateTemp(".", outputName+"-*")
 	if err != nil {
-		log.Fatalf("cannot create output file: %v", err)
+		return fmt.Errorf("create reduce output temporary file: %w", err)
 	}
-	i := 0
-	for i < len(kva) {
+	tempName := tempFile.Name()
+
+	for i := 0; i < len(kva); {
 		j := i + 1
 		for j < len(kva) && kva[i].Key == kva[j].Key {
 			j++
 		}
-		values := []string{}
+
+		values := make([]string, 0, j-i)
 		for k := i; k < j; k++ {
 			values = append(values, kva[k].Value)
 		}
+
 		result := reducef(kva[i].Key, values)
-		fmt.Fprintf(tmpFile, "%v %v\n", kva[i].Key, result)
+		if _, err := fmt.Fprintf(tempFile, "%v %v\n", kva[i].Key, result); err != nil {
+			tempFile.Close()
+			return fmt.Errorf("write reduce output: %w", err)
+		}
 		i = j
 	}
-	log.Printf("Reduce task %d completed. Output written to %s, path: %s", taskId, oname, tmpFile.Name())
-	tmpFile.Close()
 
-	if !TaskDone(workerID, taskId, TaskReduce) {
-		log.Printf("Reduce task %d completion not approved. Deleting temporary file: %s\n", taskId, tmpFile.Name())
-		os.Remove(tmpFile.Name())
-		return
-	}
-	if err := os.Rename(tmpFile.Name(), oname); err != nil {
-		log.Fatalf("cannot rename temporary file: %v", err)
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close reduce output temporary file: %w", err)
 	}
 
-	TaskAck(workerID, taskId, TaskReduce)
+	approved, err := TaskDone(workerID, taskID, TaskReduce)
+	if err != nil {
+		return err
+	}
+	if !approved {
+		return fmt.Errorf("coordinator rejected reduce task completion")
+	}
+
+	if err := os.Rename(tempName, outputName); err != nil {
+		return fmt.Errorf("publish reduce output %q: %w", outputName, err)
+	}
+
+	if err := TaskAck(workerID, taskID, TaskReduce); err != nil {
+		return err
+	}
+	return nil
 }

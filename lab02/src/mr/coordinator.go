@@ -64,174 +64,154 @@ func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *RegisterWo
 	return nil
 }
 
-// Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
-	log.Printf("GetTask called, WorkerID: %d\n", args.WorkerID)
-
 	c.taskLock.Lock()
 	defer c.taskLock.Unlock()
-	for (len(c.remainingMapTasks) == 0 && len(c.startedMapTasks) > 0) ||
-		(len(c.remainingReduceTasks) == 0 && len(c.startedReduceTasks) > 0) {
-		log.Printf("Waiting for tasks to become available for Worker %d\n", args.WorkerID)
-		c.waitingForTaskCond.Wait()
+
+	for {
+		var taskType TaskType
+		var taskID int
+
+		switch {
+		case len(c.remainingMapTasks) > 0:
+			taskType = TaskMap
+			taskID = firstTaskID(c.remainingMapTasks)
+
+		case c.mapPhaseDone() && len(c.remainingReduceTasks) > 0:
+			taskType = TaskReduce
+			taskID = firstTaskID(c.remainingReduceTasks)
+
+		case c.mapPhaseDone() && c.reducePhaseDone():
+			reply.Task = Task{Type: TaskNone, WorkerID: args.WorkerID}
+			return nil
+
+		default:
+			c.waitingForTaskCond.Wait()
+			continue
+		}
+
+		task := c.assignTask(taskType, taskID, args.WorkerID)
+		reply.Task = task
+		c.startTaskTimeout(taskType, taskID)
+		return nil
 	}
-	switch {
-	case len(c.remainingMapTasks) > 0:
-		taskID := -1
-		for id := range c.remainingMapTasks {
-			taskID = id
-			break
-		}
-		delete(c.remainingMapTasks, taskID)
-		c.startedMapTasks[taskID] = struct{}{}
-		task := c.mapTasks[taskID]
-		task.WorkerID = args.WorkerID
-		task.Status = TaskInProgress
-		c.mapTasks[taskID] = task
-		log.Printf("Assigning Map task %d to Worker %d\n", taskID, args.WorkerID)
-		reply.Task = task
-		time.AfterFunc(10*time.Second, func() {
-			c.taskLock.Lock()
-			defer c.taskLock.Unlock()
-			if task, ok := c.mapTasks[taskID]; ok {
-				if task.Status == TaskInProgress {
-					log.Printf("Map task %d timed out. Reassigning...\n", taskID)
-					delete(c.startedMapTasks, taskID)
-					task.WorkerID = -1
-					task.Status = TaskIdle
-					c.mapTasks[taskID] = task
-					c.remainingMapTasks[taskID] = struct{}{}
-					c.waitingForTaskCond.Signal()
-				}
-			}
-		})
-	//case len(c.startedMapTasks) > 0:
-	// TODO: Handle in-progress map tasks (e.g., check for timeouts)
-	case len(c.remainingReduceTasks) > 0:
-		// for len(c.startedMapTasks) > 0 {
-		// 	c.taskLock.Unlock()
-		// 	time.Sleep(500 * time.Millisecond)
-		// 	c.taskLock.Lock()
-		// }
-		taskID := -1
-		for id := range c.remainingReduceTasks {
-			taskID = id
-			break
-		}
-		delete(c.remainingReduceTasks, taskID)
-		c.startedReduceTasks[taskID] = struct{}{}
-		task := c.reduceTasks[taskID]
-		task.WorkerID = args.WorkerID
-		task.Status = TaskInProgress
-		c.reduceTasks[taskID] = task
-		log.Printf("Assigning Reduce task %d to Worker %d\n", taskID, args.WorkerID)
-		reply.Task = task
-		time.AfterFunc(10*time.Second, func() {
-			c.taskLock.Lock()
-			defer c.taskLock.Unlock()
-			if task, ok := c.reduceTasks[taskID]; ok {
-				if task.Status == TaskInProgress {
-					log.Printf("Reduce task %d timed out. Reassigning...\n", taskID)
-					delete(c.startedReduceTasks, taskID)
-					task.WorkerID = -1
-					task.Status = TaskIdle
-					c.reduceTasks[taskID] = task
-					c.remainingReduceTasks[taskID] = struct{}{}
-					c.waitingForTaskCond.Signal()
-				}
-			}
-		})
+}
+
+func firstTaskID(tasks map[int]struct{}) int {
+	for id := range tasks {
+		return id
+	}
+	return -1
+}
+
+func (c *Coordinator) taskSets(taskType TaskType) (
+	map[int]Task,
+	map[int]struct{},
+	map[int]struct{},
+) {
+	switch taskType {
+	case TaskMap:
+		return c.mapTasks, c.remainingMapTasks, c.startedMapTasks
+	case TaskReduce:
+		return c.reduceTasks, c.remainingReduceTasks, c.startedReduceTasks
 	default:
-		log.Printf("No tasks available for Worker %d\n", args.WorkerID)
-		reply.Task = Task{
-			Type:     TaskNone,
-			WorkerID: args.WorkerID,
-		}
+		panic("unknown task type")
 	}
-
-	return nil
 }
 
-func (c *Coordinator) ReportTaskCompletion(args *TaskCompletionArgs, reply *TaskCompletionReply) error {
+func (c *Coordinator) assignTask(taskType TaskType, taskID, workerID int) Task {
+	tasks, remaining, started := c.taskSets(taskType)
 
-	taskID := args.TaskID
-	taskType := args.TaskType
+	task := tasks[taskID]
+	task.WorkerID = workerID
+	task.Status = TaskInProgress
 
-	c.taskLock.Lock()
-	defer c.taskLock.Unlock()
-	log.Printf("ReportTaskCompletion called, WorkerID: %d, TaskID: %d, TaskType: %s\n", args.WorkerID, args.TaskID, args.TaskType)
-	log.Printf("Remaining Map Tasks: %d, Remaining Reduce Tasks: %d\n", len(c.remainingMapTasks), len(c.remainingReduceTasks))
+	delete(remaining, taskID)
+	started[taskID] = struct{}{}
+	tasks[taskID] = task
+	return task
+}
 
-	switch taskType {
-	case TaskMap:
-		if task, ok := c.mapTasks[taskID]; ok {
-			if task.WorkerID != args.WorkerID {
-				log.Printf("Worker %d reported completion for Map task %d, but it was assigned to Worker %d\n", args.WorkerID, taskID, task.WorkerID)
-				reply.Approved = false
-				return nil
-			}
-			task.Status = TaskWaitAck
-			c.mapTasks[taskID] = task
+func (c *Coordinator) startTaskTimeout(taskType TaskType, taskID int) {
+	time.AfterFunc(10*time.Second, func() {
+		c.taskLock.Lock()
+		defer c.taskLock.Unlock()
+
+		tasks, remaining, started := c.taskSets(taskType)
+		task, ok := tasks[taskID]
+		if !ok {
+			return
 		}
-	case TaskReduce:
-		if task, ok := c.reduceTasks[taskID]; ok {
-			if task.WorkerID != args.WorkerID {
-				log.Printf("Worker %d reported completion for Reduce task %d, but it was assigned to Worker %d\n", args.WorkerID, taskID, task.WorkerID)
-				reply.Approved = false
-				return nil
-			}
-			task.Status = TaskWaitAck
-			c.reduceTasks[taskID] = task
+		if task.Status != TaskInProgress && task.Status != TaskWaitAck {
+			return
 		}
-	}
 
-	reply.Approved = true
-	if c.mapPhaseDone() || c.reducePhaseDone() {
+		task.Status = TaskIdle
+		task.WorkerID = -1
+		tasks[taskID] = task
+		delete(started, taskID)
+		remaining[taskID] = struct{}{}
 		c.waitingForTaskCond.Broadcast()
-	}
-	return nil
+	})
 }
 
-func (c *Coordinator) AckTaskCompletion(args *AckTaskCompletionArgs, reply *AckTaskCompletionReply) error {
-	// Implementation for acknowledging task completion
-	taskID := args.TaskID
-	taskType := args.TaskType
-
+func (c *Coordinator) ReportTaskCompletion(
+	args *TaskCompletionArgs,
+	reply *TaskCompletionReply,
+) error {
 	c.taskLock.Lock()
 	defer c.taskLock.Unlock()
-	log.Printf("AckTaskCompletion called, WorkerID: %d, TaskID: %d, TaskType: %s\n", args.WorkerID, args.TaskID, args.TaskType)
 
-	switch taskType {
-	case TaskMap:
-		if task, ok := c.mapTasks[taskID]; ok {
-			if task.WorkerID != args.WorkerID {
-				log.Printf("Worker %d acknowledged completion for Map task %d, but it was assigned to Worker %d\n", args.WorkerID, taskID, task.WorkerID)
-				return nil
-			}
-			task.Status = TaskCompleted
-			c.mapTasks[taskID] = task
-			delete(c.startedMapTasks, taskID)
-		}
-	case TaskReduce:
-		if task, ok := c.reduceTasks[taskID]; ok {
-			if task.WorkerID != args.WorkerID {
-				log.Printf("Worker %d acknowledged completion for Reduce task %d, but it was assigned to Worker %d\n", args.WorkerID, taskID, task.WorkerID)
-				return nil
-			}
-			task.Status = TaskCompleted
-			c.reduceTasks[taskID] = task
-			delete(c.startedReduceTasks, taskID)
-		}
+	tasks, _, _ := c.taskSets(args.TaskType)
+	task, ok := tasks[args.TaskID]
+	if !ok || task.WorkerID != args.WorkerID {
+		reply.Approved = false
+		return nil
 	}
 
+	if task.Status == TaskWaitAck {
+		reply.Approved = true
+		return nil
+	}
+	if task.Status != TaskInProgress {
+		reply.Approved = false
+		return nil
+	}
+
+	task.Status = TaskWaitAck
+	tasks[args.TaskID] = task
+	reply.Approved = true
 	return nil
 }
 
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
+func (c *Coordinator) AckTaskCompletion(
+	args *AckTaskCompletionArgs,
+	reply *AckTaskCompletionReply,
+) error {
+	c.taskLock.Lock()
+	defer c.taskLock.Unlock()
+
+	tasks, _, started := c.taskSets(args.TaskType)
+	task, ok := tasks[args.TaskID]
+	if !ok || task.WorkerID != args.WorkerID {
+		reply.Accepted = false
+		return nil
+	}
+
+	if task.Status == TaskCompleted {
+		reply.Accepted = true
+		return nil
+	}
+	if task.Status != TaskWaitAck {
+		reply.Accepted = false
+		return nil
+	}
+
+	task.Status = TaskCompleted
+	tasks[args.TaskID] = task
+	delete(started, args.TaskID)
+	reply.Accepted = true
+	c.waitingForTaskCond.Broadcast()
 	return nil
 }
 
@@ -260,18 +240,9 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
-
 	c.taskLock.Lock()
 	defer c.taskLock.Unlock()
-	if len(c.remainingMapTasks) == 0 &&
-		len(c.remainingReduceTasks) == 0 &&
-		len(c.startedMapTasks) == 0 &&
-		len(c.startedReduceTasks) == 0 {
-		ret = true
-	}
-
-	return ret
+	return c.mapPhaseDone() && c.reducePhaseDone()
 }
 
 // create a Coordinator.

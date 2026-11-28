@@ -11,19 +11,6 @@ import (
 	"strconv"
 )
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
 type RegisterWorkerArgs struct {
 }
 
@@ -56,6 +43,7 @@ type AckTaskCompletionArgs struct {
 }
 
 type AckTaskCompletionReply struct {
+	Accepted bool
 }
 
 // Add your RPC definitions here.
