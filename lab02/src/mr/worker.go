@@ -38,7 +38,9 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	log.SetOutput(io.Discard)
+	if os.Getenv("DEBUG") != "1" {
+		log.SetOutput(io.Discard)
+	}
 
 	workerID := RegisterWorker()
 
@@ -56,13 +58,12 @@ func Worker(mapf func(string, string) []KeyValue,
 		case TaskMap:
 			log.Printf("Worker %d received Map task nr: %d\n", workerID, task.TaskID)
 
-			mapTask(task.TaskID, task.InputFile, task.NReduce, mapf)
-			TaskDone(workerID, task.TaskID, task.Type)
+			mapTask(workerID, task.TaskID, task.InputFile, task.NReduce, mapf)
 
 		case TaskReduce:
 			log.Printf("Worker %d received Reduce task nr %d\n", workerID, task.TaskID)
 
-			reduceTask(task.TaskID, task.NMap, reducef)
+			reduceTask(workerID, task.TaskID, task.NMap, reducef)
 			TaskDone(workerID, task.TaskID, task.Type)
 		default:
 			log.Printf("Worker received unknown task type: %s\n", task.Type)
@@ -101,7 +102,7 @@ func GetTask(workerID int) Task {
 	return reply.Task
 }
 
-func TaskDone(workerID int, taskID int, taskType TaskType) {
+func TaskDone(workerID int, taskID int, taskType TaskType) (approved bool) {
 	args := TaskCompletionArgs{
 		WorkerID: workerID,
 		TaskID:   taskID,
@@ -114,6 +115,23 @@ func TaskDone(workerID int, taskID int, taskType TaskType) {
 		log.Printf("Call to ReportTaskCompletion failed\n")
 	} else {
 		//log.Printf("ReportTaskCompletion reply: %v\n", reply)
+	}
+	return reply.Approved
+}
+
+func TaskAck(workerID int, taskID int, taskType TaskType) {
+	args := AckTaskCompletionArgs{
+		WorkerID: workerID,
+		TaskID:   taskID,
+		TaskType: taskType,
+	}
+	reply := AckTaskCompletionReply{}
+
+	ok := call("Coordinator.AckTaskCompletion", &args, &reply)
+	if !ok {
+		log.Printf("Call to AckTaskCompletion failed\n")
+	} else {
+		//log.Printf("AckTaskCompletion reply: %v\n", reply)
 	}
 }
 
@@ -165,7 +183,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	return false
 }
 
-func mapTask(taskId int, inputFile string, nReduce int, mapf func(string, string) []KeyValue) {
+func mapTask(workerID int, taskId int, inputFile string, nReduce int, mapf func(string, string) []KeyValue) {
 	// Read the input file
 	content, err := os.ReadFile(inputFile)
 	if err != nil {
@@ -177,15 +195,17 @@ func mapTask(taskId int, inputFile string, nReduce int, mapf func(string, string
 
 	encoders := make([]*json.Encoder, nReduce)
 	files := make([]*os.File, nReduce)
+	tmpToFileName := make(map[string]string)
 
 	for i := 0; i < nReduce; i++ {
 		intermediateFileName := fmt.Sprintf("mr-%d-%d", taskId, i)
-		file, err := os.Create(intermediateFileName)
+		tmpFile, err := os.CreateTemp("", intermediateFileName)
 		if err != nil {
-			log.Fatalf("cannot create intermediate file: %v", err)
+			log.Fatalf("cannot create temporary file: %v", err)
 		}
-		files[i] = file
-		encoders[i] = json.NewEncoder(file)
+		tmpToFileName[tmpFile.Name()] = intermediateFileName
+		files[i] = tmpFile
+		encoders[i] = json.NewEncoder(tmpFile)
 	}
 
 	defer func() {
@@ -207,10 +227,27 @@ func mapTask(taskId int, inputFile string, nReduce int, mapf func(string, string
 		}
 	}
 
+	approved := TaskDone(workerID, taskId, TaskMap)
+
+	for _, file := range files {
+		if !approved {
+			log.Printf("Task %d completion not approved. Deleting temporary file: %s\n", taskId, file.Name())
+			os.Remove(file.Name())
+			continue
+		}
+		tmpFileName := file.Name()
+		finalFileName := tmpToFileName[tmpFileName]
+		if err := os.Rename(tmpFileName, finalFileName); err != nil {
+			log.Fatalf("cannot rename temporary file: %v", err)
+		}
+	}
+
+	TaskAck(workerID, taskId, TaskMap)
+
 	log.Printf("Map task %d completed.\n", taskId)
 }
 
-func reduceTask(taskId int, nMap int, reducef func(string, []string) string) {
+func reduceTask(workerID int, taskId int, nMap int, reducef func(string, []string) string) {
 	kva := []KeyValue{}
 	for i := 0; i < nMap; i++ {
 		inputFile := fmt.Sprintf("mr-%d-%d", i, taskId)
@@ -232,8 +269,7 @@ func reduceTask(taskId int, nMap int, reducef func(string, []string) string) {
 	sort.Sort(ByKey(kva))
 
 	oname := fmt.Sprintf("mr-out-%d", taskId)
-	ofile, err := os.Create(oname)
-	log.Printf("Creating output file: %s", oname)
+	tmpFile, err := os.CreateTemp("", oname)
 	if err != nil {
 		log.Fatalf("cannot create output file: %v", err)
 	}
@@ -248,10 +284,20 @@ func reduceTask(taskId int, nMap int, reducef func(string, []string) string) {
 			values = append(values, kva[k].Value)
 		}
 		result := reducef(kva[i].Key, values)
-		fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, result)
+		fmt.Fprintf(tmpFile, "%v %v\n", kva[i].Key, result)
 		i = j
 	}
-	log.Printf("Reduce task %d completed. Output written to %s, path: %s", taskId, oname, ofile.Name())
-	ofile.Close()
-	//task.OutputFile = oname
+	log.Printf("Reduce task %d completed. Output written to %s, path: %s", taskId, oname, tmpFile.Name())
+	tmpFile.Close()
+
+	if !TaskDone(workerID, taskId, TaskReduce) {
+		log.Printf("Reduce task %d completion not approved. Deleting temporary file: %s\n", taskId, tmpFile.Name())
+		os.Remove(tmpFile.Name())
+		return
+	}
+	if err := os.Rename(tmpFile.Name(), oname); err != nil {
+		log.Fatalf("cannot rename temporary file: %v", err)
+	}
+
+	TaskAck(workerID, taskId, TaskReduce)
 }

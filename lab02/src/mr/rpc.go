@@ -46,6 +46,16 @@ type TaskCompletionArgs struct {
 }
 
 type TaskCompletionReply struct {
+	Approved bool
+}
+
+type AckTaskCompletionArgs struct {
+	WorkerID int
+	TaskID   int
+	TaskType TaskType
+}
+
+type AckTaskCompletionReply struct {
 }
 
 // Add your RPC definitions here.

@@ -24,6 +24,7 @@ type TaskStatus string
 const (
 	TaskIdle       TaskStatus = "Idle"
 	TaskInProgress TaskStatus = "InProgress"
+	TaskWaitAck    TaskStatus = "WaitAck"
 	TaskCompleted  TaskStatus = "Completed"
 	TaskNotReady   TaskStatus = "NotReady"
 )
@@ -50,6 +51,7 @@ type Coordinator struct {
 	nextWorkerID         int
 	registrationLock     sync.Mutex
 	taskLock             sync.Mutex
+	waitingForTaskCond   *sync.Cond
 }
 
 func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *RegisterWorkerReply) error {
@@ -68,6 +70,11 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 
 	c.taskLock.Lock()
 	defer c.taskLock.Unlock()
+	for (len(c.remainingMapTasks) == 0 && len(c.startedMapTasks) > 0) ||
+		(len(c.remainingReduceTasks) == 0 && len(c.startedReduceTasks) > 0) {
+		log.Printf("Waiting for tasks to become available for Worker %d\n", args.WorkerID)
+		c.waitingForTaskCond.Wait()
+	}
 	switch {
 	case len(c.remainingMapTasks) > 0:
 		taskID := -1
@@ -83,14 +90,29 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 		c.mapTasks[taskID] = task
 		log.Printf("Assigning Map task %d to Worker %d\n", taskID, args.WorkerID)
 		reply.Task = task
+		time.AfterFunc(10*time.Second, func() {
+			c.taskLock.Lock()
+			defer c.taskLock.Unlock()
+			if task, ok := c.mapTasks[taskID]; ok {
+				if task.Status == TaskInProgress {
+					log.Printf("Map task %d timed out. Reassigning...\n", taskID)
+					delete(c.startedMapTasks, taskID)
+					task.WorkerID = -1
+					task.Status = TaskIdle
+					c.mapTasks[taskID] = task
+					c.remainingMapTasks[taskID] = struct{}{}
+					c.waitingForTaskCond.Signal()
+				}
+			}
+		})
 	//case len(c.startedMapTasks) > 0:
 	// TODO: Handle in-progress map tasks (e.g., check for timeouts)
 	case len(c.remainingReduceTasks) > 0:
-		for len(c.startedMapTasks) > 0 {
-			c.taskLock.Unlock()
-			time.Sleep(500 * time.Millisecond)
-			c.taskLock.Lock()
-		}
+		// for len(c.startedMapTasks) > 0 {
+		// 	c.taskLock.Unlock()
+		// 	time.Sleep(500 * time.Millisecond)
+		// 	c.taskLock.Lock()
+		// }
 		taskID := -1
 		for id := range c.remainingReduceTasks {
 			taskID = id
@@ -104,6 +126,21 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 		c.reduceTasks[taskID] = task
 		log.Printf("Assigning Reduce task %d to Worker %d\n", taskID, args.WorkerID)
 		reply.Task = task
+		time.AfterFunc(10*time.Second, func() {
+			c.taskLock.Lock()
+			defer c.taskLock.Unlock()
+			if task, ok := c.reduceTasks[taskID]; ok {
+				if task.Status == TaskInProgress {
+					log.Printf("Reduce task %d timed out. Reassigning...\n", taskID)
+					delete(c.startedReduceTasks, taskID)
+					task.WorkerID = -1
+					task.Status = TaskIdle
+					c.reduceTasks[taskID] = task
+					c.remainingReduceTasks[taskID] = struct{}{}
+					c.waitingForTaskCond.Signal()
+				}
+			}
+		})
 	default:
 		log.Printf("No tasks available for Worker %d\n", args.WorkerID)
 		reply.Task = Task{
@@ -128,12 +165,59 @@ func (c *Coordinator) ReportTaskCompletion(args *TaskCompletionArgs, reply *Task
 	switch taskType {
 	case TaskMap:
 		if task, ok := c.mapTasks[taskID]; ok {
+			if task.WorkerID != args.WorkerID {
+				log.Printf("Worker %d reported completion for Map task %d, but it was assigned to Worker %d\n", args.WorkerID, taskID, task.WorkerID)
+				reply.Approved = false
+				return nil
+			}
+			task.Status = TaskWaitAck
+			c.mapTasks[taskID] = task
+		}
+	case TaskReduce:
+		if task, ok := c.reduceTasks[taskID]; ok {
+			if task.WorkerID != args.WorkerID {
+				log.Printf("Worker %d reported completion for Reduce task %d, but it was assigned to Worker %d\n", args.WorkerID, taskID, task.WorkerID)
+				reply.Approved = false
+				return nil
+			}
+			task.Status = TaskWaitAck
+			c.reduceTasks[taskID] = task
+		}
+	}
+
+	reply.Approved = true
+	if c.mapPhaseDone() || c.reducePhaseDone() {
+		c.waitingForTaskCond.Broadcast()
+	}
+	return nil
+}
+
+func (c *Coordinator) AckTaskCompletion(args *AckTaskCompletionArgs, reply *AckTaskCompletionReply) error {
+	// Implementation for acknowledging task completion
+	taskID := args.TaskID
+	taskType := args.TaskType
+
+	c.taskLock.Lock()
+	defer c.taskLock.Unlock()
+	log.Printf("AckTaskCompletion called, WorkerID: %d, TaskID: %d, TaskType: %s\n", args.WorkerID, args.TaskID, args.TaskType)
+
+	switch taskType {
+	case TaskMap:
+		if task, ok := c.mapTasks[taskID]; ok {
+			if task.WorkerID != args.WorkerID {
+				log.Printf("Worker %d acknowledged completion for Map task %d, but it was assigned to Worker %d\n", args.WorkerID, taskID, task.WorkerID)
+				return nil
+			}
 			task.Status = TaskCompleted
 			c.mapTasks[taskID] = task
 			delete(c.startedMapTasks, taskID)
 		}
 	case TaskReduce:
 		if task, ok := c.reduceTasks[taskID]; ok {
+			if task.WorkerID != args.WorkerID {
+				log.Printf("Worker %d acknowledged completion for Reduce task %d, but it was assigned to Worker %d\n", args.WorkerID, taskID, task.WorkerID)
+				return nil
+			}
 			task.Status = TaskCompleted
 			c.reduceTasks[taskID] = task
 			delete(c.startedReduceTasks, taskID)
@@ -149,6 +233,14 @@ func (c *Coordinator) ReportTaskCompletion(args *TaskCompletionArgs, reply *Task
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
 	return nil
+}
+
+func (c *Coordinator) mapPhaseDone() bool {
+	return len(c.remainingMapTasks) == 0 && len(c.startedMapTasks) == 0
+}
+
+func (c *Coordinator) reducePhaseDone() bool {
+	return len(c.remainingReduceTasks) == 0 && len(c.startedReduceTasks) == 0
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -199,6 +291,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		taskLock:             sync.Mutex{},
 	}
 
+	c.waitingForTaskCond = sync.NewCond(&c.taskLock)
+
 	for i, file := range files {
 		c.mapTasks[i] = Task{
 			Type:      TaskMap,
@@ -224,7 +318,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		c.remainingReduceTasks[i] = struct{}{}
 	}
 
-	log.SetOutput(io.Discard)
+	if os.Getenv("DEBUG") != "1" {
+		log.SetOutput(io.Discard)
+	}
 
 	c.server()
 	return &c
